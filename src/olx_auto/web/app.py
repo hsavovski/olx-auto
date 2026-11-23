@@ -5,12 +5,12 @@ import urllib.parse
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import listings, users
+from .. import drafting, listings, users
 from ..config import Settings
 from ..olx import OlxError
 from ..photos import InvalidPhoto
@@ -91,7 +91,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return render(request, "new_listing.html", user=user)
 
     @app.post("/listings")
-    def create_listing(request: Request, user: CurrentUser,
+    def create_listing(request: Request, user: CurrentUser, background: BackgroundTasks,
                        photos: Annotated[list[UploadFile], File()],
                        note: Annotated[str, Form()] = ""):
         raw = [p.file.read() for p in photos if p.filename]
@@ -99,6 +99,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             listing = listings.create(user, note, raw)
         except (ValueError, InvalidPhoto) as e:
             return render(request, "new_listing.html", 400, user=user, error=str(e), note=note)
+        if settings.openrouter_api_key:
+            background.add_task(drafting.generate, settings, user, listing["id"])
         return redirect(f"/listings/{listing['id']}")
 
     @app.get("/listings/{listing_id}")

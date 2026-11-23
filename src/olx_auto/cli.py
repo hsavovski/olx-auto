@@ -1,12 +1,13 @@
 """Command line: `olx-auto <command>`. Run `olx-auto -h` for help."""
 import argparse
 import getpass
+import json
 import shutil
 import sys
 import urllib.parse
 from pathlib import Path
 
-from . import users
+from . import drafting, listings, users
 from .config import Settings
 from .olx import OlxError
 
@@ -80,6 +81,25 @@ def cmd_check(settings: Settings, args) -> None:
             print(f"FAIL {name}: {e}")
 
 
+def cmd_draft(settings: Settings, args) -> None:
+    """Run vision + agent on a listing in the foreground (same as the web app's background task)."""
+    user = _user(settings, args.name)
+    try:
+        listing = listings.load(user, args.listing_id)
+    except KeyError:
+        sys.exit(f"No such listing: {args.listing_id}")
+    if args.fresh:
+        listing.update(observations=None, draft={}, locked=[], questions=[])
+        listings.save(user, listing)
+    listing = drafting.generate(settings, user, args.listing_id, instruction=args.instruction)
+    if listing.get("ai_error"):
+        sys.exit(f"Failed: {listing['ai_error']}")
+    print(json.dumps({k: listing.get(k) for k in ("draft", "questions", "problems", "agent_stopped")},
+                     ensure_ascii=False, indent=2))
+    print(f"Cost so far: ${listings.total_cost(listing):.4f}  "
+          f"(trace: {listings.trace_path(user, args.listing_id)})")
+
+
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="olx-auto")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -106,6 +126,13 @@ def main(argv=None) -> None:
     s = sub.add_parser("check", help="smoke-test the OLX API for a user")
     s.add_argument("name")
     s.set_defaults(fn=cmd_check)
+
+    s = sub.add_parser("draft", help="(re)draft a listing with the AI (vision + agent)")
+    s.add_argument("name")
+    s.add_argument("listing_id")
+    s.add_argument("--instruction", default="", help="refinement request, as from the card")
+    s.add_argument("--fresh", action="store_true", help="drop observations, draft, locks and questions")
+    s.set_defaults(fn=cmd_draft)
 
     args = p.parse_args(argv)
     args.fn(Settings.load(), args)
