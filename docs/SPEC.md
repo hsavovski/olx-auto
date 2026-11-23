@@ -44,7 +44,7 @@ Secondary goal: learn how to build AI tools. The agent is deliberately hand-writ
    - **cost** of this listing so far (vision + agent + style learning, including all refinements);
    - optional collapsible **trace panel** ("how the agent got here"), shown when `SHOW_TRACE=true`.
 5. **Submit**, enabled only when validation passes (§8) → images uploaded to S3 → advert created on OLX → S3 objects deleted → status `posted` with link. The card *is* the approval step: there is no staging on OLX.
-   - A created advert isn't live yet. Its OLX status is shown next to `posted` and refreshed from the API: `disabled`/`new` → **pending moderation**; `limited` → **needs payment** (the category's free quota is used up; the user pays in the OLX app); `active` → **live**; `moderated`/`blocked` → **rejected by OLX**.
+   - A created advert isn't live yet. Its OLX status is shown instead of `posted`, refreshed from the API when the home page or the card is opened (at most once a minute per advert): `disabled`/`new` → **pending moderation**; `limited` → **needs payment** (the category's free quota is used up; the user pays in the OLX app); `active` → **live**; `moderated`/`blocked` → **rejected by OLX**.
 6. On OLX rejection → status `failed`, error shown and mapped to the relevant field when possible; the user fixes it and **resubmits**. OLX returns `{field, title (BG), detail}` per error. Field paths are `title`, `description`, `category_id`, `contact.*`, `location.*`, `params.price[0]` (price) and `params.<attribute code>`.
 
 ## 5. AI architecture
@@ -153,7 +153,7 @@ Global config in `.env`: OLX `client_id`/`client_secret`, OpenRouter key, `VISIO
 
 The spike comes first, because its answers can change the design. After the skeleton (storage layout) exists, vision, comparables and UI work can proceed in parallel.
 
-Progress (2026-11-23): **steps 1–5 are done**; step 6 is next. One real drafting run on photos (test account) worked end to end.
+Progress (2026-11-23): **steps 1–6 are done**; step 7 (comparables) is next. One real drafting run on photos (test account) worked end to end.
 
 | Step | Status | Where |
 |---|---|---|
@@ -162,7 +162,7 @@ Progress (2026-11-23): **steps 1–5 are done**; step 6 is next. One real drafti
 | 3. Vision stage | ✅ done | `vision.py`, `llm.py` |
 | 4. Agent loop + tools | ✅ done (no comparables tool until step 7) | `agent.py`, `drafting.py`, `olx-auto draft` |
 | 5. Listing card UI | ✅ done, plus style learning (§5) | `web/templates/listing.html`, `style.py`, Style page |
-| 6. Validation + submit | validation done (`validation.submit_problems`), payload builder done (`adverts.py`); S3 upload, submit route, resubmit and status refresh not started (S3 bucket and IAM user exist) | |
+| 6. Validation + submit | ✅ done: first real post on `ico-test` went `active` in under 12 min | `validation.py`, `adverts.py`, `s3.py`, `submitting.py` |
 | 7. Comparables scraper | not started | |
 | 8. Polish | not started | |
 
@@ -176,6 +176,7 @@ Progress (2026-11-23): **steps 1–5 are done**; step 6 is next. One real drafti
 6. **Validation + submit** (S3 upload, OLX create, failed/resubmit).
 7. **Comparables scraper.**
 8. **Polish**: launchd autostart, cost overview, model comparison.
+   *To do:* register `https://<mac>.<tailnet>.ts.net/olx/callback` as the redirect URI in the OLX developer app and set the same URL as `redirect_uri=` in `.env`, so Connect OLX lands back on the app instead of needing the paste-code fallback.
 
 ## 13. Future
 

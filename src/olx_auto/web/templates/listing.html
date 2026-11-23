@@ -7,7 +7,7 @@
   <label for="{{ for_id }}">{{ label }}</label>
   {% if name in listing.locked %}
   <button class="btn link lock" form="unlock-{{ name }}" title="Edited by you: the agent keeps it. Tap to let the agent change it."
-          {% if running %}disabled{% endif %}>🔒 locked</button>
+          {% if frozen %}disabled{% endif %}>🔒 locked</button>
   {% endif %}
 </div>
 {%- endmacro %}
@@ -24,7 +24,7 @@
       {% if listing.photos | length > 1 %}
       <form method="post" action="/listings/{{ listing.id }}/photos/{{ p }}/delete"
             onsubmit="return confirm('Delete this photo?')">
-        <button class="btn link delete" title="Delete this photo" {% if running %}disabled{% endif %}>Delete</button>
+        <button class="btn link delete" title="Delete this photo" {% if frozen %}disabled{% endif %}>Delete</button>
       </form>
       {% endif %}
     </div>
@@ -37,6 +37,21 @@
 <div class="banner info"><span class="spinner"></span><div><strong>{{ listing.progress }}</strong><br><span class="muted">You can close this page; the draft keeps going.</span></div></div>
 {% endif %}
 {% if listing.ai_error %}<div class="banner error">{{ listing.ai_error }}</div>{% endif %}
+{% if listing.status == "posted" and listing.olx %}
+<div class="banner info"><div><strong>On OLX: {{ olx_states.get(listing.olx.status, listing.olx.status) }}</strong>
+  {%- if listing.olx.url %} · <a href="{{ listing.olx.url }}" target="_blank" rel="noopener">open the advert</a>{% endif %}
+  {% if listing.olx.status == "limited" %}<br><span class="muted">The free adverts in this category are used up: pay for it in the OLX app.</span>{% endif %}
+</div></div>
+{% endif %}
+{% if listing.status == "failed" and listing.error %}
+<div class="banner error"><div><strong>{{ listing.error.message }}</strong>
+  {% if listing.error.fields %}<ul class="problems">{% for f in listing.error.fields %}<li>{{ f.field }}: {{ f.title or f.detail }}</li>{% endfor %}</ul>{% endif %}
+  <span class="muted">Fix it, then submit again.</span>
+</div></div>
+{% endif %}
+{% if interrupted %}
+<div class="banner error">A submit was cut off. Check your adverts on OLX before submitting again, so it isn't posted twice.</div>
+{% endif %}
 
 {% for f in listing.locked %}
 <form id="unlock-{{ f }}" method="post" action="/listings/{{ listing.id }}/unlock/{{ f }}"></form>
@@ -51,7 +66,7 @@
 {% endif %}
 
 <form class="card" method="post" action="/listings/{{ listing.id }}/edit">
-  <fieldset {% if running %}disabled{% endif %}>
+  <fieldset {% if frozen %}disabled{% endif %}>
   {{ field_label("title", "Title", "title") }}
   <input type="text" id="title" name="title" value="{{ draft.title }}" maxlength="150">
 
@@ -117,6 +132,15 @@
       {%- if profile.location.district_name %}, {{ profile.location.district_name }}{% endif %}
     {%- else %} · <span class="error">no location set</span>{% endif %}</p>
 </div>
+
+{% if can_submit %}
+<form class="card" method="post" action="/listings/{{ listing.id }}/submit"
+      onsubmit="return confirm('Post this listing on OLX now?')">
+  <h2>Submit to OLX</h2>
+  <p class="hint">Posts the advert right away; it goes live once OLX has moderated it.</p>
+  <div class="actions"><button class="btn" type="submit" {% if problems or running %}disabled{% endif %}>Submit to OLX</button></div>
+</form>
+{% endif %}
 {% elif not running and not listing.ai_error %}
 <div class="card empty"><p class="muted">
   {% if ai_enabled %}The agent hasn't drafted this listing yet.{% else %}Drafting is off: set OPENROUTER_API_KEY in .env.{% endif %}
@@ -125,7 +149,7 @@
 
 {% if ai_enabled %}
 <form class="card" method="post" action="/listings/{{ listing.id }}/refine">
-  <fieldset {% if running %}disabled{% endif %}>
+  <fieldset {% if frozen %}disabled{% endif %}>
   {% if listing.questions %}
   <h2>Questions from the agent</h2>
   {% for q in listing.questions %}

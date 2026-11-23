@@ -11,7 +11,7 @@ def _attributes(values: dict) -> list[dict]:
         if isinstance(value, list):
             given = [str(v) for v in value if v not in (None, "")]
             if given:
-                # Multi-value shape is unverified against the API; the first real post settles it
+                # OLX takes several values as `values` (confirmed on a real post, spike-notes.md)
                 out.append({"code": code, "values": given})
         elif value not in (None, ""):
             out.append({"code": code, "value": str(value)})

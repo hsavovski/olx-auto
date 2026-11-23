@@ -6,6 +6,7 @@ Phone photos → AI-drafted olx.bg listing → review → submit. Single-owner a
 
 - `docs/SPEC.md`: **scope and behaviour**. Read before building a feature, and check that a change fits a decision recorded there. When a decision changes, update the spec in the same change.
 - `docs/ARCHITECTURE.md`: **code layout, data on disk, request flows**. Read before adding a module, a route or a field in `listing.json`. Update it when any of those change.
+- `docs/GUIDE.md`: **plain-language overview with diagrams** for a reader new to Python. Update it in the same change when a module, a flow or a listing state changes.
 - `docs/spike-notes.md`: **OLX API facts** (categories, attributes, validation errors, open questions). Read before writing anything that builds or validates an advert payload.
 
 ## Done means

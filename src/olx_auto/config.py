@@ -35,6 +35,10 @@ class Settings:
     agent_max_iterations: int = 15
     agent_max_cost: float = 0.50  # USD per agent run
     show_trace: bool = False
+    s3_bucket: str = ""  # photos at submit time (spec §9); infra/s3-setup.sh creates it
+    aws_region: str = "eu-central-1"
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
 
     @classmethod
     def load(cls, env_file: Path = ROOT / ".env") -> "Settings":
@@ -52,6 +56,10 @@ class Settings:
             agent_max_iterations=int(env.get("AGENT_MAX_ITERATIONS") or 15),
             agent_max_cost=float(env.get("AGENT_MAX_COST") or 0.50),
             show_trace=env.get("SHOW_TRACE", "").lower() in ("1", "true", "yes"),
+            s3_bucket=env.get("S3_BUCKET", ""),
+            aws_region=env.get("AWS_REGION") or "eu-central-1",
+            aws_access_key_id=env.get("AWS_ACCESS_KEY_ID", ""),
+            aws_secret_access_key=env.get("AWS_SECRET_ACCESS_KEY", ""),
         )
 
 

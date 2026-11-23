@@ -17,9 +17,11 @@ src/olx_auto/
   agent.py       Stage 2: hand-written tool loop → draft, questions; guardrails, locks
   validation.py  Draft checks (spec §8): content rules, lengths, attributes; submit readiness
   adverts.py     Listing + profile → OLX `POST /adverts` payload
+  s3.py          PhotoStore: put a photo + presigned GET URL, delete (boto3, SigV4, regional endpoint)
+  submitting.py  Submit: S3 → create advert → S3 cleanup → posted/failed; OLX status refresh; remove
   drafting.py    Listing-level orchestration: vision once, agent run, style learning, progress/cost/trace
   style.py       Style guide: read/write with backups + change log, revert, the learner LLM call
-  cli.py         `olx-auto` command (serve, add-user, set-password, login, check, draft)
+  cli.py         `olx-auto` command (serve, add-user, set-password, login, check, draft, remove-advert)
   web/app.py     FastAPI app factory: auth, listings + card (edit/lock/refine), profile, style guide, Connect OLX
   web/templates/ Jinja templates, mobile-first, one inline stylesheet in base.html
 context/         *.example files copied into each new user's folder
@@ -49,7 +51,7 @@ data/
       trace.json             {"runs": [vision run, agent run, ...]}, appended per run
 ```
 
-`listing.json` shape (`olx`/`error` are placeholders for submit):
+`listing.json` shape:
 
 ```json
 {"id", "created_at", "updated_at", "status": "draft|submitting|posted|failed",
@@ -67,7 +69,11 @@ data/
  "problems": [],                      check_draft output for the current draft
  "progress": null | "Choosing category…",  set while a run is going
  "ai_error": null | "...", "agent_stopped": "submitted|max_iterations|max_cost",
- "cost": {"vision": 0.0, "agent": 0.0, "style": 0.0}, "olx": null, "error": null}
+ "cost": {"vision": 0.0, "agent": 0.0, "style": 0.0},
+ "olx": null | {"id", "url", "status": OLX advert status, "images": [OLX CDN urls],
+                "posted_at", "checked_at"},   set by a successful submit
+ "error": null | {"message", "fields": [{"field": card field, "olx_field", "title", "detail"}]}}
+                                      why the last submit failed
 ```
 
 Draft attributes are a `{code: value}` dict because that's easier for the model; the submit payload
@@ -119,6 +125,18 @@ Each step updates `progress` in `listing.json` (reloading the file before each w
 - Background work is started through `_start`, which sets `progress` *before* the redirect, so the page the user lands on is already refreshing.
 - The trace panel (`SHOW_TRACE`) shows each run: vision observations, the agent's messages and tool calls (system prompt left out), and style learner results.
 
+### Submit
+`POST /listings/{id}/submit` → `submitting.submit`, run inside the request (OLX answers in seconds, and the seller sees the result at once):
+1. Refused (back to the card) unless the status is `draft`/`failed` or a cut-off `submitting`, and `validation.submit_problems` is empty.
+2. Status `submitting` is saved first, so a second tap is refused.
+3. Each photo goes to S3 as `<user>/<listing id>/<random>-NN.jpg` with a 1-hour presigned GET URL; `adverts.payload` + `Olx.create_advert` posts the advert. OLX copies the images to its CDN during that call.
+4. The S3 objects are deleted whatever happened (a failed delete is left to the bucket's 30-day lifecycle rule).
+5. Success → `posted` with `olx`. Failure → `failed` with `error`: OLX validation paths are mapped to card fields (`params.price[0]` → price, `params.<code>` → `attributes.<code>`, `contact.*`/`location.*` → profile). A timeout after sending says the advert may exist, so the seller checks OLX before retrying.
+
+A `submitting` listing untouched for 5 minutes was cut off (e.g. a restart) and can be submitted again, with a warning. A posted (or submitting) listing is frozen: `_editable` sends edit, refine, unlock, photo delete and submit back to the card.
+
+The home page and a posted listing's card call `submitting.refresh_status` (at most once a minute per advert, skipped for final states such as deleted or expired; a 404 means deleted). `olx_states` maps the OLX status to the card and home labels (spec §4.5). `olx-auto remove-advert <user> <id>` takes a test advert down (deactivate if `active`, then delete) and puts the listing back to `draft`.
+
 ### Profile
 `/settings/profile` edits the user's data. `profiles.load` fills in missing sections, and saving keeps keys it doesn't know about.
 - `POST /settings/profile`: display name (`user.json`), contact, advertiser type, delivery. `profiles.update_details` validates first (name required, phone/email format) and changes nothing on error.
@@ -156,6 +174,7 @@ Read by `Settings.load()` from `.env` at the repo root, with environment variabl
 | `VISION_MODEL`, `AGENT_MODEL` | OpenRouter model ids (defaults in `config.py`) |
 | `AGENT_MAX_ITERATIONS`, `AGENT_MAX_COST` | Guardrails per agent run (15, $0.50) |
 | `SHOW_TRACE` | Show the trace panel on the card |
+| `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Photo bucket for submit (`infra/s3-setup.sh`); submit fails with a clear error without them |
 
 Tests construct `Settings(...)` directly with a `tmp_path` data dir and never read `.env`.
 
@@ -190,4 +209,4 @@ Tests construct `Settings(...)` directly with a `tmp_path` data dir and never re
 
 ## Not built yet
 
-Submit itself (S3 upload, the route calling `adverts.payload` + `create_advert`, failed/resubmit, OLX status refresh, test-advert cleanup command), comparables, autostart. Order and parallelism are in spec §12.
+Comparables, autostart. Order and parallelism are in spec §12.

@@ -72,12 +72,17 @@ Ran `spikes/olx_image_spike.py`: two JPEGs uploaded to S3, posted with 7-day pre
 ### S3 setup
 `infra/s3-setup.sh` (idempotent) creates bucket `olx-auto-<account-id>` in `eu-central-1` with all public access blocked and a 30-day expiry, plus IAM user `olx-auto` with one inline policy: Put/Get/DeleteObject on the bucket's objects and ListBucket on the bucket. No groups, no managed policies, no console login. Verified with the app's key: bucket object operations work; ListBuckets, DeleteBucket, PutBucketPolicy, lifecycle changes, IAM and EC2 are denied, and a direct public object URL returns 403.
 
+### First real post through the app (2026-11-23)
+`ico-test`, category 623 (ski boots), 4 photos via S3, delivery set. Created 17:16, **`active` within 12 minutes** (it was seen `active` on the first card view at 17:28).
+- **Multi-value attributes work as `{code, values: [...]}`.** OLX echoes every attribute with both keys: `{code, value: null, values: ["207", "209"]}` for multi, `{code, value: "used", values: null}` for single.
+- All 4 images came through; `courier: true`, the district and `advertiser_type` were kept. OLX added the district's `latitude`/`longitude` to `location`. Contact holds `name` and `phone` (no email).
+- **Cleanup of an `active` advert:** `deactivate` is accepted, but a `DELETE` sent right after is refused with 400 "Невалидно състояние". Deactivation finishes a moment later (status `removed_by_user`); then `DELETE` works and `GET` returns 404. `submitting.remove` waits for the status to leave `active` first.
+
 ## Still open (non-blocking)
 
-1. Moderation time from `new` to `active`, and what a rejection looks like. It didn't resolve within 3+ min, and the image post went straight to `limited`. This will show up on the first real post.
+1. What a moderation rejection looks like (status and any reason). Moderation itself took under 12 minutes on the first real post.
 2. Free-ad quota per category (how many, over what period). Only matters for volume.
 3. Title maximum in the OLX web form (the minimum is 16; the API enforces neither).
-4. Multi-value attributes (`delivery_paid_by`): `adverts.py` sends `{code, values: [...]}`. The spike only posted single values, so the first real post with delivery settles it.
 
 ## Implications for the design
 

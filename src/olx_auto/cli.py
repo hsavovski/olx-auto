@@ -7,7 +7,7 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-from . import drafting, listings, users
+from . import drafting, listings, submitting, users
 from .config import Settings
 from .olx import OlxError
 
@@ -102,6 +102,18 @@ def cmd_draft(settings: Settings, args) -> None:
           f"(trace: {listings.trace_path(user, args.listing_id)})")
 
 
+def cmd_remove_advert(settings: Settings, args) -> None:
+    """Clean up a test advert (CLAUDE.md): deactivate if active, delete; the listing becomes a draft."""
+    user = _user(settings, args.name)
+    try:
+        listing = submitting.remove(settings, user, args.listing_id)
+    except KeyError:
+        sys.exit(f"No such listing: {args.listing_id}")
+    except (ValueError, OlxError, RuntimeError, OSError) as e:
+        sys.exit(f"Failed: {e}")
+    print(f"Deleted OLX advert {listing['olx']['id']}")
+
+
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="olx-auto")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -137,6 +149,11 @@ def main(argv=None) -> None:
     s.add_argument("--fresh", action="store_true",
                    help="drop observations, draft, locks, questions and messages")
     s.set_defaults(fn=cmd_draft)
+
+    s = sub.add_parser("remove-advert", help="take a listing's advert off OLX (test adverts)")
+    s.add_argument("name")
+    s.add_argument("listing_id")
+    s.set_defaults(fn=cmd_remove_advert)
 
     args = p.parse_args(argv)
     args.fn(Settings.load(), args)
