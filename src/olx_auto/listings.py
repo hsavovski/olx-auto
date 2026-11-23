@@ -120,6 +120,18 @@ def photo_path(user: User, listing_id: str, name: str) -> Path:
     return path
 
 
+def delete_photo(user: User, listing: dict, name: str) -> None:
+    """Remove a photo from the listing and from disk (e.g. more than the category's `photos_limit`).
+    The last photo stays: a listing always has one. The other photos keep their names."""
+    if name not in listing["photos"]:
+        raise KeyError(name)
+    if len(listing["photos"]) == 1:
+        raise ValueError("A listing needs at least one photo")
+    listing["photos"].remove(name)
+    save(user, listing)
+    photo_path(user, listing["id"], name).unlink()
+
+
 def trace_path(user: User, listing_id: str) -> Path:
     return _dir(user, listing_id) / "trace.json"
 

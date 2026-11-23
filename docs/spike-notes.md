@@ -39,7 +39,8 @@ Status: **done** (2026-11-23). Read-only probes, a real post without images, and
 - Always required: `title`, `description`, `category_id`, `advertiser_type`, `contact.name`, `location.city_id`.
 - **Validation is staged.** Category-specific rules (required attributes, price) are only reported once the basic fields pass.
 - Stage 2 (on 185 Strollers with valid basics) reported `params.price[0]` "Въведи цена!" and `params.state` "Невалидна стойност". So **attribute values are enforced server-side** and **price is required**. Note the error paths: `params.<attr_code>` and `params.price[0]`, not `attributes`/`price`.
-- **Title length is not enforced by the API**: a 1-character and a 303-character title were both accepted. Our own validation must enforce sensible limits. The web form's limits are unverified; the spec's 16–150 is a reasonable start, though shorter titles probably read better in search results.
+- **Title length is not enforced by the API**: a 1-character and a 303-character title were both accepted. Our own validation must enforce sensible limits. The web form (edit page, checked 2026-11-23) sets `minlength=16` on the title but no `maxlength`, so the upper bound, if any, is JS-only and still unverified; the spec's 150 stays our own rule.
+- Web form required fields: `title`, `description`, `parameters.price.price`, `person` (contact name). `email` and `phone` are optional. `city_id` isn't marked `required` in the HTML but is required by the API. The description has no HTML length attributes (its 40–9000 comes from the API). Category attributes are custom dropdowns, not `<select>`s, so their codes come only from `/categories/{id}/attributes`.
 
 ### Account
 - `/users/me/account-balance` is all zeros, `/users/me/packets` is empty, and payment methods are `["account"]`. A free ad was still accepted on the test account (category 185 Strollers).
@@ -75,7 +76,8 @@ Ran `spikes/olx_image_spike.py`: two JPEGs uploaded to S3, posted with 7-day pre
 
 1. Moderation time from `new` to `active`, and what a rejection looks like. It didn't resolve within 3+ min, and the image post went straight to `limited`. This will show up on the first real post.
 2. Free-ad quota per category (how many, over what period). Only matters for volume.
-3. Title limits in the OLX web form (the API doesn't enforce any).
+3. Title maximum in the OLX web form (the minimum is 16; the API enforces neither).
+4. Multi-value attributes (`delivery_paid_by`): `adverts.py` sends `{code, values: [...]}`. The spike only posted single values, so the first real post with delivery settles it.
 
 ## Implications for the design
 

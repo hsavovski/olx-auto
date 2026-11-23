@@ -1,11 +1,12 @@
-"""Draft checks (spec §8): OLX content rules, lengths, attributes.
+"""Draft checks (spec §8): OLX content rules, lengths, attributes, and what Submit needs on top.
 
-The agent's `submit_draft` tool runs `check_draft` and hands problems back to the model. The
-submit-time checks (location, contact, photo count) belong here too once submit exists.
+The agent's `submit_draft` tool runs `check_draft` and hands problems back to the model.
+`submit_problems` adds the checks that need the listing and the profile (photos, location,
+contact); the agent never sees contact details, so those stay out of `check_draft`.
 """
 import re
 
-TITLE_MIN, TITLE_MAX = 16, 150  # not enforced by OLX (spike-notes.md); our own limit
+TITLE_MIN, TITLE_MAX = 16, 150  # API enforces neither; min matches the web form, max is ours (spike-notes.md)
 DESCRIPTION_MIN, DESCRIPTION_MAX = 40, 9000
 
 PHONE_RE = re.compile(r"\+?\d(?:[\s\-/.()]*\d){7,}")
@@ -82,4 +83,23 @@ def check_draft(draft: dict, attributes: list[dict] | None) -> list[str]:
         problems.append("category_id: missing")
     elif attributes is not None:
         problems += attribute_problems(draft.get("attributes") or {}, attributes)
+    return problems
+
+
+def submit_problems(listing: dict, profile: dict) -> list[str]:
+    """Everything that must pass before Submit. The district rule (a city with districts needs
+    one) is enforced when the profile location is saved."""
+    draft, category = listing["draft"], listing.get("category") or {}
+    problems = check_draft(draft, category.get("attributes"))
+    if isinstance(draft.get("category_id"), int) and category.get("id") != draft["category_id"]:
+        problems.append("category: its attributes aren't loaded, update the draft")
+    count, limit = len(listing.get("photos") or []), category.get("photos_limit")
+    if not count:
+        problems.append("photos: add at least one")
+    elif limit and count > limit:
+        problems.append(f"photos: {count}, this category takes at most {limit}")
+    if not profile["location"].get("city_id"):
+        problems.append("location: not set, choose it in your profile")
+    if not (profile["contact"].get("name") or "").strip():
+        problems.append("contact: name missing, add it in your profile")
     return problems

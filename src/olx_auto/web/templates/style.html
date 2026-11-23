@@ -2,17 +2,17 @@
 {% block title %}Style guide · olx-auto{% endblock %}
 {% block content %}
 <h1>Style guide</h1>
-{% if message %}<div class="banner">{{ message }}</div>{% endif %}
+{% if message %}<div class="banner info">{{ message }}</div>{% endif %}
 <form class="card" method="post" action="/settings/style">
   <p class="muted">The agent follows this guide on every listing. It also updates itself from your
     feedback on listings: style wishes you write on a card and changes you make to titles and
     descriptions. Facts about a single item stay out of it.</p>
-  <textarea name="guide" rows="24" lang="bg">{{ guide }}</textarea>
-  <p><button class="btn" type="submit">Save</button></p>
+  <textarea class="guide" name="guide" rows="24" lang="bg" aria-label="Style guide">{{ guide }}</textarea>
+  <div class="actions"><button class="btn" type="submit">Save</button></div>
 </form>
 
 <div class="card">
-  <strong>Changes</strong>
+  <h2>Changes</h2>
   {% for e in log %}
   <div class="row log-entry">
     <div>
@@ -22,7 +22,7 @@
         {% else %}learned from <a href="/listings/{{ e.source }}">a listing</a>{% endif %}</div>
     </div>
     <form method="post" action="/settings/style/revert/{{ e.backup }}">
-      <button class="btn link" title="Restore the guide as it was before this change">Undo</button>
+      <button class="btn secondary" title="Restore the guide as it was before this change">Undo</button>
     </form>
   </div>
   {% else %}

@@ -13,6 +13,7 @@ SOFIA = [
     {"city": {"id": 8771, "name": "София"}, "district": {"id": 1387, "name": "Зона Б-5-3"}},
     {"city": {"id": 9000, "name": "Банкя"}, "district": None},
 ]
+DISTRICTS = {8771: [{"id": 1585, "name": "Център"}, {"id": 1387, "name": "Зона Б-5-3"}]}
 DETAILS = {"display_name": "Ицо", "name": "Тест Тестов", "phone": "+359 888 000 000",
            "email": "test@example.com", "advertiser_type": "private", "courier": "true",
            "delivery_note": "лично или OLX доставка"}
@@ -26,6 +27,7 @@ def located(monkeypatch):
         calls.append((latitude, longitude))
         return SOFIA
     monkeypatch.setattr(Olx, "locations", fake_locations)
+    monkeypatch.setattr(Olx, "districts", lambda self, city_id: DISTRICTS.get(city_id, []))
     return calls
 
 
@@ -89,6 +91,15 @@ def test_location_without_district_and_bad_choice(logged_in, user, located):
     assert profiles.load(user)["location"]["district_id"] is None
     r = logged_in.post("/settings/profile/location", data={"lat": 1, "lng": 2, "choice": 7})
     assert r.status_code == 400 and "Pick one of the places" in r.text
+
+
+def test_city_with_districts_needs_one(logged_in, user, monkeypatch, located):
+    monkeypatch.setattr(Olx, "locations",
+                        lambda self, latitude, longitude: [{"city": {"id": 8771, "name": "София"}}])
+    before = user.profile_file.read_text()
+    r = logged_in.post("/settings/profile/location", data={"lat": 1, "lng": 2, "choice": 0})
+    assert r.status_code == 400 and "This city has districts" in r.text
+    assert user.profile_file.read_text() == before
 
 
 def test_location_lookup_failure_is_shown(logged_in, monkeypatch):

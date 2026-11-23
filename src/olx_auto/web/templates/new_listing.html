@@ -1,14 +1,18 @@
 {% extends "base.html" %}
 {% block title %}New listing · olx-auto{% endblock %}
 {% block content %}
+<a class="back" href="/">← Listings</a>
 <h1>New listing</h1>
 <form class="card" method="post" action="/listings" enctype="multipart/form-data">
-  {% if error %}<p class="error">{{ error }}</p>{% endif %}
-  <label for="photos">Photos</label>
-  <input type="file" id="photos" name="photos" accept="image/*,.heic,.heif" multiple required>
-  <p class="muted">Take new photos or pick from the gallery.</p>
+  {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+  <label for="photos" class="dropzone">
+    <div class="icon">📷</div>
+    <strong>Photos</strong>
+    <span class="muted">Take new photos or pick from the gallery.</span>
+    <input type="file" id="photos" name="photos" accept="image/*,.heic,.heif" multiple required>
+  </label>
   <label for="note">Note (optional)</label>
   <textarea id="note" name="note" placeholder="e.g. used 2 years, works fine, has original box">{{ note or "" }}</textarea>
-  <p><button class="btn" type="submit">Upload</button></p>
+  <div class="actions"><button class="btn big" type="submit">Upload</button></div>
 </form>
 {% endblock %}

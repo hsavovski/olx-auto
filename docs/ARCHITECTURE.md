@@ -15,7 +15,8 @@ src/olx_auto/
   llm.py         OpenRouter chat via the openai SDK; Reply carries tokens + cost (USD)
   vision.py      Stage 1: photos + note → observations JSON; follow-up questions on the photos
   agent.py       Stage 2: hand-written tool loop → draft, questions; guardrails, locks
-  validation.py  Draft checks (spec §8): content rules, lengths, attributes
+  validation.py  Draft checks (spec §8): content rules, lengths, attributes; submit readiness
+  adverts.py     Listing + profile → OLX `POST /adverts` payload
   drafting.py    Listing-level orchestration: vision once, agent run, style learning, progress/cost/trace
   style.py       Style guide: read/write with backups + change log, revert, the learner LLM call
   cli.py         `olx-auto` command (serve, add-user, set-password, login, check, draft)
@@ -110,7 +111,9 @@ Each step updates `progress` in `listing.json` (reloading the file before each w
 
 ### Listing card
 `GET /listings/{id}` renders the draft as a form. While `listings.is_running` (progress set and written in the last 10 minutes, so a run killed by a restart doesn't block forever), the page refreshes every 3 s, the forms are disabled, and the POST routes below redirect back without changing anything.
+- **To fix before submitting** is `validation.submit_problems(listing, profile)`, computed on every page view because the profile can change at any time: `check_draft` plus category loaded, photo count (≥ 1, ≤ `photos_limit`), location and contact name. The stored `problems` field stays `check_draft` only (what the agent last saw).
 - `POST /listings/{id}/edit`: title, description, price, negotiable, `attr_<code>` (one select, or checkboxes for multi-value attributes). `listings.edit_draft` compares canonically (so a re-ordered multi-value isn't a change), records each changed field in `edits` and locks it. `problems` is recomputed. If title, description or price changed, `drafting.try_learn_style` runs in the background.
+- `POST /listings/{id}/photos/{name}/delete` (name checked against `PHOTO_RE`) removes the photo from `photos` and from disk, so a listing can be brought under the category's `photos_limit`. The last photo can't be deleted, and the other photos keep their names. Observations that mention a photo by number aren't updated.
 - `POST /listings/{id}/unlock/{field}` removes a lock. The lock buttons sit inside the edit form but submit their own empty forms (`form="unlock-<field>"`), because forms can't be nested.
 - `POST /listings/{id}/refine`: `answer_<question id>` and `message` → answers saved, message appended to `messages` → `drafting.generate` in the background.
 - Background work is started through `_start`, which sets `progress` *before* the redirect, so the page the user lands on is already refreshing.
@@ -119,7 +122,7 @@ Each step updates `progress` in `listing.json` (reloading the file before each w
 ### Profile
 `/settings/profile` edits the user's data. `profiles.load` fills in missing sections, and saving keeps keys it doesn't know about.
 - `POST /settings/profile`: display name (`user.json`), contact, advertiser type, delivery. `profiles.update_details` validates first (name required, phone/email format) and changes nothing on error.
-- **Location**: the "Use my location" button reads the browser's geolocation (needs HTTPS, i.e. the tailnet URL, or localhost) and reloads with `?lat&lng`. The page shows the nearest unique city/district pairs from OLX `/locations` (client token). `POST /settings/profile/location` sends back the point and the chosen index. The server looks the point up again instead of trusting ids and names from the form, then stores ids **and names** (so pages can show them without another OLX call). The coordinates are not stored.
+- **Location**: the "Use my location" button reads the browser's geolocation (needs HTTPS, i.e. the tailnet URL, or localhost) and reloads with `?lat&lng`. The page shows the nearest unique city/district pairs from OLX `/locations` (client token). `POST /settings/profile/location` sends back the point and the chosen index. The server looks the point up again instead of trusting ids and names from the form. A choice without a district is refused if OLX lists districts for that city (`/cities/{id}/districts`), because OLX then requires one. It stores ids **and names** (so pages can show them without another OLX call). The coordinates are not stored.
 - `POST /settings/password`: current password checked with `users.authenticate` (1 s sleep on failure, as on `/login`), new one at least 8 characters and repeated.
 
 ### Style learning
@@ -185,4 +188,4 @@ Tests construct `Settings(...)` directly with a `tmp_path` data dir and never re
 
 ## Not built yet
 
-The rest of validation (location, contact, photo count), submit to OLX + S3, comparables, autostart. Order and parallelism are in spec §12.
+Submit itself (S3 upload, the route calling `adverts.payload` + `create_advert`, failed/resubmit, OLX status refresh, test-advert cleanup command), comparables, autostart. Order and parallelism are in spec §12.
