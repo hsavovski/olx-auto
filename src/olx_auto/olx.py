@@ -1,7 +1,6 @@
 """Minimal OLX.bg partner API client (stdlib only).
 
-Credentials come from .env (client_id, client_secret). Tokens are cached in
-.token.json (chmod 600). Two contexts:
+Tokens are cached in a per-account JSON file (chmod 600). Two contexts:
   - client: client_credentials, read-only public data (categories, cities, ...)
   - user:   authorization_code, needed to create/manage adverts and read /users/me
 """
@@ -13,11 +12,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).parent
 BASE = "https://www.olx.bg/api/partner"
 TOKEN_URL = "https://www.olx.bg/api/open/oauth/token"
 AUTH_URL = "https://www.olx.bg/oauth/authorize"
-TOKEN_FILE = ROOT / ".token.json"
 SCOPE = "v2 read write"
 
 
@@ -25,16 +22,6 @@ class OlxError(Exception):
     def __init__(self, status, body):
         self.status, self.body = status, body
         super().__init__(f"HTTP {status}: {json.dumps(body, ensure_ascii=False)[:800]}")
-
-
-def _load_env():
-    env = {}
-    for line in (ROOT / ".env").read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            env[k.strip()] = v.strip().strip("'\"")
-    return env
 
 
 def _http(method, url, *, headers=None, data=None, form=None):
@@ -63,25 +50,29 @@ def _http(method, url, *, headers=None, data=None, form=None):
 
 
 class Olx:
-    def __init__(self, redirect_uri=None):
-        env = _load_env()
-        self.client_id = env["client_id"]
-        self.client_secret = env["client_secret"]
-        self.redirect_uri = redirect_uri or env.get("redirect_uri")
+    def __init__(self, token_file: Path, client_id, client_secret, redirect_uri=None):
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.redirect_uri = redirect_uri
+        self.token_file = Path(token_file)
         self._tokens = self._read_tokens()
+
+    @property
+    def connected(self):
+        return "user" in self._tokens
 
     # ---- tokens -------------------------------------------------------
     def _read_tokens(self):
         try:
-            return json.loads(TOKEN_FILE.read_text())
+            return json.loads(self.token_file.read_text())
         except (OSError, ValueError):
             return {}
 
     def _save(self, ctx, tok):
         tok["expires_at"] = time.time() + int(tok.get("expires_in", 3600)) - 60
         self._tokens[ctx] = tok
-        TOKEN_FILE.write_text(json.dumps(self._tokens))
-        os.chmod(TOKEN_FILE, 0o600)
+        self.token_file.write_text(json.dumps(self._tokens))
+        os.chmod(self.token_file, 0o600)
 
     def _token_request(self, **fields):
         form = {"client_id": self.client_id, "client_secret": self.client_secret, **fields}
@@ -110,7 +101,7 @@ class Olx:
     def user_token(self):
         t = self._tokens.get("user")
         if not t:
-            raise RuntimeError("No user token. Run: python3 login.py")
+            raise RuntimeError("OLX not connected: use Settings → Connect OLX or `olx-auto login <user>`")
         if t["expires_at"] < time.time():
             new = self._token_request(grant_type="refresh_token", refresh_token=t["refresh_token"])
             self._save("user", new)
@@ -131,7 +122,8 @@ class Olx:
 
     # ---- public data (client token is enough) -------------------------
     def categories(self, parent_id=None):
-        return self.get("/categories", user=False, params={"parent_id": parent_id} if parent_id else None)["data"]
+        params = {"parent_id": parent_id} if parent_id else None
+        return self.get("/categories", user=False, params=params)["data"]
 
     def category(self, category_id):
         return self.get(f"/categories/{category_id}", user=False)["data"]

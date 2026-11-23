@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+{% if not olx_connected %}
+<div class="banner">OLX account not connected. <a href="/settings/olx">Connect OLX</a></div>
+{% endif %}
+<a class="btn big" href="/listings/new">+ New listing</a>
+
+<div class="row"><h1>Listings</h1><span class="muted">Total cost {{ total_cost | usd }}</span></div>
+<div class="card list">
+  {% for l in listings %}
+  <a class="item" href="/listings/{{ l.id }}">
+    <img src="/listings/{{ l.id }}/photos/{{ l.photos[0] }}" alt="">
+    <div style="flex:1">
+      <div>{{ l.draft.title or l.note or "Untitled" }}</div>
+      <div class="muted">{{ l.created_at[:10] }} · {{ cost_of(l) | usd }}</div>
+    </div>
+    <span class="pill">{{ l.status }}</span>
+  </a>
+  {% else %}
+  <p class="muted">No listings yet.</p>
+  {% endfor %}
+</div>
+{% endblock %}

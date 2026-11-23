@@ -1,0 +1,17 @@
+{
+  "advertiser_type": "private",
+  "contact": {
+    "name": "Иван",
+    "phone": "+359888123456",
+    "email": "ivan@example.com"
+  },
+  "location": {
+    "city_id": null,
+    "district_id": null,
+    "note": "Find ids with `olx-auto check` / the /cities endpoint"
+  },
+  "delivery": {
+    "courier": true,
+    "note": "OLX доставка"
+  }
+}

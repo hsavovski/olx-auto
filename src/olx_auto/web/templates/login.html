@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Log in · olx-auto{% endblock %}
+{% block content %}
+<h1>olx-auto</h1>
+<form class="card" method="post" action="/login">
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <label for="username">User</label>
+  <input type="text" id="username" name="username" autocomplete="username" autocapitalize="none" required>
+  <label for="password">Password</label>
+  <input type="password" id="password" name="password" autocomplete="current-password" required>
+  <p><button class="btn" type="submit">Log in</button></p>
+</form>
+{% endblock %}
