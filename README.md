@@ -2,7 +2,7 @@
 
 Take a few photos on your phone → an AI agent drafts a complete [olx.bg](https://www.olx.bg) listing → you review, tweak and submit.
 
-> **Status:** early. Login, users, connecting OLX accounts, AI drafting (vision + agent), the listing card with style learning, and the checks before submit work. Posting to OLX is next. See the [work order](docs/SPEC.md#12-work-order).
+> **Status:** early. Login, users, connecting OLX accounts, AI drafting (vision + agent), the listing card with style learning, and posting to OLX (with status tracking) work. Price comparables from OLX search are next. See the [work order](docs/SPEC.md#12-work-order).
 
 - [docs/GUIDE.md](docs/GUIDE.md): how the app works, in plain language with diagrams
 - [docs/SPEC.md](docs/SPEC.md): what we're building and why
