@@ -3,7 +3,7 @@
 Spec §12 step 1. Run on 2026-11-23 against the **test** OLX account (`.token.test.json`), which connected to the app without problems.
 Reproduce with `uv run python spikes/olx_spike.py`. Raw responses are written to `spikes/out/` (gitignored, because they contain account data).
 
-Status: **read-only part done**. The posting part (real advert + S3 images) is still open; see the end of this file.
+Status: **read-only probes and a real post without images done** (2026-11-23). Only the image question is still open; see the end of this file.
 
 ## Answered
 
@@ -37,26 +37,39 @@ Status: **read-only part done**. The posting part (real advert + S3 images) is s
 - Errors are structured: `error.validation[] = {field, title (BG), detail (EN)}`, where `field` is a dotted path (`contact.name`, `location.city_id`). This maps straight onto card fields for the failed/resubmit flow (§4.6).
 - **Description: 40–9000 characters** (confirmed).
 - Always required: `title`, `description`, `category_id`, `advertiser_type`, `contact.name`, `location.city_id`.
-- **Validation is staged.** Title length, required attributes (e.g. missing `state`) and invalid attribute values were **not reported** while a basic field (city) was missing. Titles of 1 and 300 characters both passed the first stage. So **title limits and attribute and price rules are still unconfirmed** and need a fully valid payload.
+- **Validation is staged.** Category-specific rules (required attributes, price) are only reported once the basic fields pass.
+- Stage 2 (on 185 Strollers with valid basics) reported `params.price[0]` "Въведи цена!" and `params.state` "Невалидна стойност". So **attribute values are enforced server-side** and **price is required**. Note the error paths: `params.<attr_code>` and `params.price[0]`, not `attributes`/`price`.
+- **Title length is not enforced by the API**: a 1-character and a 303-character title were both accepted. Our own validation must enforce sensible limits. The web form's limits are unverified; the spec's 16–150 is a reasonable start, though shorter titles probably read better in search results.
 
 ### Account
-- `/users/me/account-balance` is all zeros, `/users/me/packets` is empty, and payment methods are `["account"]`. Whether a free ad on the test account can be posted with no packet is unknown until we post.
+- `/users/me/account-balance` is all zeros, `/users/me/packets` is empty, and payment methods are `["account"]`. A free ad was still accepted on the test account (category 185 Strollers).
 - `/paid-features` lists promotion bundles. Not needed for v1.
 
-## Still open (needs a real post on the test account)
+### Real post (test account, no images)
+Payload that works:
 
-1. Title limits (spec guesses 16–150) and the price field shape/requirement (`price: {value, currency, negotiable?}`).
-2. Whether attribute validation (required + allowed values) is enforced server-side.
-3. The initial advert status after create (moderation? `new` → `active`?).
-4. Free-ad quota/packet behaviour on an account with a zero balance.
-5. **Images:** whether OLX copies `images[].url` to its CDN. Post with presigned S3 URLs, delete the S3 objects, then check whether the images still load. This needs the S3 bucket first.
-6. Deactivate → delete flow (`advert_command(..., "deactivate")` then `delete_advert`).
+```json
+{"title": "...", "description": "...", "category_id": 185, "advertiser_type": "private",
+ "contact": {"name": "Тест"}, "location": {"city_id": 8771, "district_id": 1585},
+ "price": {"value": 50, "currency": "EUR", "negotiable": false},
+ "attributes": [{"code": "state", "value": "used"}]}
+```
 
-Suggested approach: one post in 414 Tools or 185 Strollers (simple, with required attributes), `advertiser_type: private`, city 8771, a deliberately short title first to read the stage-2 errors, then the real post.
+- Contact phone is optional. The response echoes `price` as `{value: "50" (string), currency, negotiable, budget, trade}`, plus `courier: false`, `valid_to` (+30 days) and the advert `url`.
+- **Status lifecycle:** `disabled` straight after create → `new` after ~1 min (presumably awaiting moderation). It stayed `new` for 3+ minutes, then we deleted it. The public URL showed no advert while it was `disabled`. The app should treat `disabled`/`new` as "posted, pending moderation" and poll for `active` (or show `moderated`/`blocked` if it's rejected).
+- `activate` on a `disabled` advert → 400 "Невалидно състояние".
+- **Cleanup:** `deactivate` only works on `active` adverts (400 "Обявата трябва да бъде активна"). For `new` adverts, `DELETE /adverts/{id}` works directly. It returns immediately, the advert disappears from the list within seconds, and `GET` then returns 404. The dev cleanup command should be: deactivate if `active`, then delete.
+
+## Still open
+
+1. **Images:** whether OLX copies `images[].url` to its CDN. Strong hint that it does: the real account's existing advert (posted through the web) lists images as `https://frankfurt.apollo.olxcdn.com/v1/files/<id>-BG/image;s=800x600`. Confirm by posting with presigned S3 URLs, deleting the S3 objects, and checking whether the advert's images still load. This needs the S3 bucket.
+2. Moderation time to reach `active`, and what a rejection looks like. This will show up naturally in the image post if we let it reach `active` before deleting.
+3. Free-ad quota per category: unknown, and it only matters once posting volume grows.
 
 ## Implications for the design
 
 - Cache the category tree and per-leaf attributes on disk. They're static enough, and the agent's `get_category_attributes` tool can read from the cache.
-- Code-level validation (§8) must cover the stage-2 rules itself, because OLX only reports them once the stage-1 fields pass. Otherwise a user fixes one error and immediately hits the next.
+- Code-level validation (§8) must cover the title length itself (the API doesn't), and should catch required attributes and price before submit so that users don't run into OLX's staged errors one at a time.
+- Map error fields: `title`, `description`, `category_id`, `contact.*`, `location.*` directly; `params.price[0]` → price; `params.<code>` → attribute `<code>`.
+- Listing status after submit: `posted (pending moderation)` until OLX reports `active`.
 - Exclude `photos_limit == 0` categories.
-- Use the field paths from validation errors to highlight the matching card field.
