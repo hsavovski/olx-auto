@@ -1,0 +1,17 @@
+# secrets
+.env
+.token.json
+*token*.json
+
+# runtime data (per-user folders: profiles, tokens, listings, photos, traces)
+data/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# os
+.DS_Store
