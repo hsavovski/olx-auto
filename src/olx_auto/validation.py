@@ -5,7 +5,7 @@ submit-time checks (location, contact, photo count) belong here too once submit 
 """
 import re
 
-TITLE_MIN, TITLE_MAX = 16, 150  # not enforced by OLX (spike-notes.md); our own limit
+TITLE_MIN, TITLE_MAX = 16, 150  # API enforces neither; min matches the web form, max is ours (spike-notes.md)
 DESCRIPTION_MIN, DESCRIPTION_MAX = 40, 9000
 
 PHONE_RE = re.compile(r"\+?\d(?:[\s\-/.()]*\d){7,}")
