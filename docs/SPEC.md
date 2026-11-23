@@ -142,16 +142,16 @@ Global config in `.env`: OLX `client_id`/`client_secret`, OpenRouter key, `VISIO
 
 The spike comes first, because its answers can change the design. After the skeleton (storage layout) exists, vision, comparables and UI work can proceed in parallel.
 
-Progress (2026-11-23): **steps 1 and 2 are done**; step 3 is next.
+Progress (2026-11-23): **steps 1–4 are done**; steps 5 and 6 are next. Steps 3–4 are tested offline only; no real drafting run on photos yet.
 
 | Step | Status | Where |
 |---|---|---|
 | 1. Spike | ✅ done | `docs/spike-notes.md`, `spikes/`, `infra/s3-setup.sh` |
 | 2. Skeleton | ✅ done | `src/olx_auto/`, `docs/ARCHITECTURE.md` |
-| 3. Vision stage | not started | |
-| 4. Agent loop + tools | not started | |
-| 5. Listing card UI | not started | |
-| 6. Validation + submit | not started (S3 bucket and IAM user exist) | |
+| 3. Vision stage | ✅ done | `vision.py`, `llm.py` |
+| 4. Agent loop + tools | ✅ done (no comparables tool until step 7) | `agent.py`, `drafting.py`, `olx-auto draft` |
+| 5. Listing card UI | not started (page shows progress, draft text and questions, read-only) | |
+| 6. Validation + submit | content/length/attribute checks done in `validation.py`; location, contact, photo count and submit not started (S3 bucket and IAM user exist) | |
 | 7. Comparables scraper | not started | |
 | 8. Polish | not started | |
 
