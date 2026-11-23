@@ -2,13 +2,14 @@
 {% block title %}Profile · olx-auto{% endblock %}
 {% block content %}
 <h1>Profile</h1>
-{% if message %}<div class="banner">{{ message }}</div>{% endif %}
+{% if message %}<div class="banner info">{{ message }}</div>{% endif %}
 
 <form class="card" method="post" action="/settings/profile">
-  {% for e in errors or [] %}<p class="error">{{ e }}</p>{% endfor %}
+  <h2>Details</h2>
+  {% for e in errors or [] %}<div class="banner error">{{ e }}</div>{% endfor %}
   <label for="display_name">Display name</label>
   <input type="text" id="display_name" name="display_name" value="{{ user.display_name }}">
-  <p class="muted">Shown in this app only. You log in as <strong>{{ user.name }}</strong>.</p>
+  <p class="hint">Shown in this app only. You log in as <strong>{{ user.name }}</strong>.</p>
 
   <label for="name">Contact name on adverts</label>
   <input type="text" id="name" name="name" value="{{ profile.contact.name or '' }}" required>
@@ -31,11 +32,11 @@
   <input type="text" id="delivery_note" name="delivery_note" value="{{ profile.delivery.note or '' }}"
          placeholder="напр. лично предаване в центъра или OLX доставка за сметка на купувача">
 
-  <p><button class="btn" type="submit">Save</button></p>
+  <div class="actions"><button class="btn" type="submit">Save</button></div>
 </form>
 
 <div class="card">
-  <label>Location</label>
+  <h2>Location</h2>
   {% if profile.location.city_id %}
   <p>{{ profile.location.city_name or "City" }}{% if profile.location.district_name %}, {{ profile.location.district_name }}{% endif %}
     <span class="muted">(city {{ profile.location.city_id }}{% if profile.location.district_id %}, district {{ profile.location.district_id }}{% endif %})</span></p>
@@ -54,25 +55,25 @@
     {% else %}
     <p class="muted">OLX found nothing near that point.</p>
     {% endfor %}
-    {% if choices %}<p><button class="btn" type="submit">Use this place</button></p>{% endif %}
+    {% if choices %}<div class="actions"><button class="btn" type="submit">Use this place</button></div>{% endif %}
   </form>
   {% endif %}
 
-  <p><button class="btn" type="button" id="locate">Use my location</button></p>
-  <p class="muted" id="locate-status">Your phone's location is only used to look up the nearest OLX city
+  <div class="actions"><button class="btn secondary" type="button" id="locate">📍 Use my location</button></div>
+  <p class="hint" id="locate-status">Your phone's location is only used to look up the nearest OLX city
     and district; it isn't stored.</p>
 </div>
 
 <form class="card" method="post" action="/settings/password">
-  <strong>Change password</strong>
-  {% if password_error %}<p class="error">{{ password_error }}</p>{% endif %}
+  <h2>Change password</h2>
+  {% if password_error %}<div class="banner error">{{ password_error }}</div>{% endif %}
   <label for="current">Current password</label>
   <input type="password" id="current" name="current" autocomplete="current-password" required>
   <label for="new">New password</label>
   <input type="password" id="new" name="new" autocomplete="new-password" minlength="8" required>
   <label for="repeat">Repeat new password</label>
   <input type="password" id="repeat" name="repeat" autocomplete="new-password" minlength="8" required>
-  <p><button class="btn" type="submit">Change password</button></p>
+  <div class="actions"><button class="btn secondary" type="submit">Change password</button></div>
 </form>
 
 <script>
