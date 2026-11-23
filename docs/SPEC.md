@@ -142,7 +142,7 @@ Global config in `.env`: OLX `client_id`/`client_secret`, OpenRouter key, `VISIO
 
 ## 11. Tech stack
 
-- Python 3.13+, `uv`, FastAPI, server-rendered templates + HTMX (mobile-first, no SPA/build step), SSE or polling for progress.
+- Python 3.13+, `uv`, FastAPI, server-rendered templates with plain forms (mobile-first, no SPA/build step), progress by page refresh. HTMX/SSE only if that stops being enough (ARCHITECTURE.md).
 - Existing `olx.py` (stdlib OLX client) moves into the package and gains per-user token storage.
 - `openai` SDK → OpenRouter; `boto3` → S3; Pillow + pillow-heif for images.
 - Testing: `pytest`, **OLX and LLM APIs mocked** in automated tests (recorded responses). Real posting happens only manually, on the test account, followed by cleanup (dev command): deactivate if `active`, then delete. `deactivate` is rejected for adverts that aren't active, and `delete` works on them directly.

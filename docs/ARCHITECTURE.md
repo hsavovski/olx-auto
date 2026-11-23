@@ -140,6 +140,8 @@ Each step updates `progress` in `listing.json` (reloading the file before each w
 ### OLX client
 `Olx(token_file, client_id, client_secret, redirect_uri)`. The client-credentials token (public data) and the user token are cached in the same file. `user_token()` refreshes automatically and writes the **rotated** refresh token back. `users.User.olx(settings)` builds a client for a user.
 
+Every request builds its own `Olx`, so several clients can hold the same token file. Writes go through a per-file lock shared by all of them: `_save` re-reads the file and changes only its own entry (writing a stale copy back would kill a rotated refresh token), then replaces the file atomically with mode 600. `user_token()` re-reads the file under the same lock before refreshing, so a token another client already refreshed is used instead of refreshed again with a dead refresh token. The lock is per process; the CLI and the server refreshing at the same moment can still collide.
+
 ## Config
 
 Read by `Settings.load()` from `.env` at the repo root, with environment variables taking precedence:

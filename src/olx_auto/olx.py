@@ -6,6 +6,7 @@ Tokens are cached in a per-account JSON file (chmod 600). Two contexts:
 """
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -16,6 +17,15 @@ BASE = "https://www.olx.bg/api/partner"
 TOKEN_URL = "https://www.olx.bg/api/open/oauth/token"
 AUTH_URL = "https://www.olx.bg/oauth/authorize"
 SCOPE = "v2 read write"
+
+# One lock per token file, shared by every `Olx` on it (each request builds its own client)
+_file_locks: dict[Path, threading.RLock] = {}
+_file_locks_guard = threading.Lock()
+
+
+def _file_lock(path: Path) -> threading.RLock:
+    with _file_locks_guard:
+        return _file_locks.setdefault(path.resolve(), threading.RLock())
 
 
 class OlxError(Exception):
@@ -69,10 +79,17 @@ class Olx:
             return {}
 
     def _save(self, ctx, tok):
+        """Re-read the file first: another client may have saved a rotated refresh token since we
+        read it, and writing our stale copy back would kill it. Written atomically, mode 600."""
         tok["expires_at"] = time.time() + int(tok.get("expires_in", 3600)) - 60
-        self._tokens[ctx] = tok
-        self.token_file.write_text(json.dumps(self._tokens))
-        os.chmod(self.token_file, 0o600)
+        with _file_lock(self.token_file):
+            self._tokens = {**self._read_tokens(), ctx: tok}
+            tmp = self.token_file.with_suffix(".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(self._tokens))
+            os.chmod(tmp, 0o600)  # O_CREAT's mode doesn't apply to a leftover tmp file
+            os.replace(tmp, self.token_file)
 
     def _token_request(self, **fields):
         form = {"client_id": self.client_id, "client_secret": self.client_secret, **fields}
@@ -103,9 +120,14 @@ class Olx:
         if not t:
             raise RuntimeError("OLX not connected: use Settings → Connect OLX or `olx-auto login <user>`")
         if t["expires_at"] < time.time():
-            new = self._token_request(grant_type="refresh_token", refresh_token=t["refresh_token"])
-            self._save("user", new)
-            t = self._tokens["user"]
+            with _file_lock(self.token_file):
+                # Another client may have refreshed meanwhile; our refresh token is then already dead
+                self._tokens = self._read_tokens()
+                t = self._tokens.get("user", t)
+                if t["expires_at"] < time.time():
+                    new = self._token_request(grant_type="refresh_token", refresh_token=t["refresh_token"])
+                    self._save("user", new)
+                    t = self._tokens["user"]
         return t["access_token"]
 
     # ---- requests -----------------------------------------------------
