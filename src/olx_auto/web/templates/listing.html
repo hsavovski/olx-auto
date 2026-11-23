@@ -3,7 +3,7 @@
 {% block head %}{% if running %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
 
 {% macro field_label(name, label, for_id) -%}
-<div class="row field-label">
+<div class="field-label">
   <label for="{{ for_id }}">{{ label }}</label>
   {% if name in listing.locked %}
   <button class="btn link lock" form="unlock-{{ name }}" title="Edited by you: the agent keeps it. Tap to let the agent change it."
@@ -13,19 +13,20 @@
 {%- endmacro %}
 
 {% block content %}
-<div class="row"><h1>{{ draft.title or "Draft" }}</h1><span class="pill">{{ listing.status }}</span></div>
+<a class="back" href="/">← Listings</a>
+<div class="page-head"><h1>{{ draft.title or "Draft" }}</h1><span class="pill status {{ listing.status }}">{{ listing.status }}</span></div>
 
 <div class="card">
-  <div class="grid">
+  <div class="photos">
     {% for p in listing.photos %}
     <a href="/listings/{{ listing.id }}/photos/{{ p }}"><img src="/listings/{{ listing.id }}/photos/{{ p }}" alt=""></a>
     {% endfor %}
   </div>
-  {% if listing.note %}<p>{{ listing.note }}</p>{% endif %}
+  {% if listing.note %}<p class="note">{{ listing.note }}</p>{% endif %}
 </div>
 
 {% if running %}
-<div class="banner"><strong>{{ listing.progress }}</strong><br><span class="muted">You can close this page; the draft keeps going.</span></div>
+<div class="banner info"><span class="spinner"></span><div><strong>{{ listing.progress }}</strong><br><span class="muted">You can close this page; the draft keeps going.</span></div></div>
 {% endif %}
 {% if listing.ai_error %}<div class="banner error">{{ listing.ai_error }}</div>{% endif %}
 
@@ -35,9 +36,9 @@
 
 {% if draft %}
 {% if listing.problems %}
-<div class="card">
-  <strong>To fix before submitting</strong>
-  <ul class="problems">{% for p in listing.problems %}<li>{{ p }}</li>{% endfor %}</ul>
+<div class="banner">
+  <div><strong>To fix before submitting</strong>
+  <ul class="problems">{% for p in listing.problems %}<li>{{ p }}</li>{% endfor %}</ul></div>
 </div>
 {% endif %}
 
@@ -50,16 +51,17 @@
   <textarea id="description" name="description" rows="14">{{ draft.description }}</textarea>
 
   <label>Category</label>
-  <p>{{ category.name or "—" }} <span class="muted">({{ draft.category_id }})</span><br>
-     <span class="muted">Wrong category? Say so under "Add information" below.</span></p>
+  <div class="category"><span>{{ category.name or "—" }}</span> <span class="muted">#{{ draft.category_id }}</span></div>
+  <p class="hint">Wrong category? Say so under "Add information" below.</p>
 
   {% if attributes %}
   {{ field_label("attributes", "Attributes", "") }}
+  <div class="attrs">
   {% for a in attributes %}
   {% set value = (draft.attributes or {}).get(a.code) %}
   {% set rules = a.validation or {} %}
-  <div class="attr">
-    <span class="muted">{{ a.label }}{% if rules.required %} *{% endif %}{% if a.unit %} ({{ a.unit }}){% endif %}</span>
+  <div class="attr{% if a['values'] and rules.allow_multiple_values %} wide{% endif %}">
+    <span class="attr-name">{{ a.label }}{% if rules.required %} *{% endif %}{% if a.unit %} ({{ a.unit }}){% endif %}</span>
     {% if a["values"] and rules.allow_multiple_values %}
       {% set chosen = (value if value is sequence and value is not string else [value]) | map("string") | list %}
       <div>{% for v in a["values"] %}
@@ -67,39 +69,40 @@
           {% if (v.code|string) in chosen %}checked{% endif %}> {{ v.label }}</label>
       {% endfor %}</div>
     {% elif a["values"] %}
-      <select name="attr_{{ a.code }}">
+      <select name="attr_{{ a.code }}" aria-label="{{ a.label }}">
         <option value="">—</option>
         {% for v in a["values"] %}
         <option value="{{ v.code }}" {% if value is not none and (v.code|string) == (value|string) %}selected{% endif %}>{{ v.label }}</option>
         {% endfor %}
       </select>
     {% else %}
-      <input type="text" name="attr_{{ a.code }}" value="{{ value if value is not none else '' }}">
+      <input type="text" name="attr_{{ a.code }}" value="{{ value if value is not none else '' }}" aria-label="{{ a.label }}">
     {% endif %}
   </div>
   {% endfor %}
+  </div>
   {% endif %}
 
-  {{ field_label("price", "Price (EUR)", "price") }}
-  <div class="row price">
-    <input type="text" inputmode="decimal" id="price" name="price" value="{{ draft.price if draft.price is not none else '' }}">
+  {{ field_label("price", "Price", "price") }}
+  <div class="price">
+    <div class="money"><input type="text" inputmode="decimal" id="price" name="price" value="{{ draft.price if draft.price is not none else '' }}"></div>
     <label class="check"><input type="checkbox" name="negotiable" {% if draft.negotiable %}checked{% endif %}> negotiable</label>
   </div>
   {% if draft.price_estimate or draft.price_reasoning %}
-  <p class="muted">
-    {% if draft.price_estimate %}AI estimate €{{ draft.price_estimate.low }}–{{ draft.price_estimate.high }}. {% endif %}
+  <div class="estimate">
+    {% if draft.price_estimate %}AI estimate <strong>€{{ draft.price_estimate.low }}–{{ draft.price_estimate.high }}</strong>. {% endif %}
     {{ draft.price_reasoning or "" }}
-  </p>
+  </div>
   {% endif %}
 
-  <p><button class="btn" type="submit">Save changes</button></p>
-  <p class="muted">Fields you change get locked. Changes to the text also teach your
+  <div class="actions"><button class="btn" type="submit">Save changes</button></div>
+  <p class="hint">Fields you change get locked. Changes to the text also teach your
     <a href="/settings/style">style guide</a>.</p>
   </fieldset>
 </form>
 
 <div class="card">
-  <label>Contact &amp; location</label>
+  <h2>Contact &amp; location</h2>
   <p class="muted">From your <a href="/settings/profile">profile</a>: {{ profile.contact.name or "no name" }}
     {%- if profile.contact.phone %}, {{ profile.contact.phone }}{% endif %}
     {%- if profile.location.city_id %} · {{ profile.location.city_name or "city " ~ profile.location.city_id }}
@@ -107,7 +110,7 @@
     {%- else %} · <span class="error">no location set</span>{% endif %}</p>
 </div>
 {% elif not running and not listing.ai_error %}
-<div class="card"><p class="muted">
+<div class="card empty"><p class="muted">
   {% if ai_enabled %}The agent hasn't drafted this listing yet.{% else %}Drafting is off: set OPENROUTER_API_KEY in .env.{% endif %}
 </p></div>
 {% endif %}
@@ -116,30 +119,32 @@
 <form class="card" method="post" action="/listings/{{ listing.id }}/refine">
   <fieldset {% if running %}disabled{% endif %}>
   {% if listing.questions %}
-  <strong>Questions from the agent</strong>
+  <h2>Questions from the agent</h2>
   {% for q in listing.questions %}
-  <label for="answer_{{ q.id }}" class="question">{{ q.question }}</label>
-  <input type="text" id="answer_{{ q.id }}" name="answer_{{ q.id }}" value="{{ q.answer or '' }}"
-         placeholder="Skip if unsure">
+  <div class="question-block">
+    <label for="answer_{{ q.id }}" class="question">{{ q.question }}</label>
+    <input type="text" id="answer_{{ q.id }}" name="answer_{{ q.id }}" value="{{ q.answer or '' }}"
+           placeholder="Skip if unsure">
+  </div>
   {% endfor %}
   {% endif %}
 
   <label for="message">Add information or ask for changes</label>
   {% if listing.messages %}
-  <ul class="muted messages">{% for m in listing.messages %}<li>{{ m.text }}</li>{% endfor %}</ul>
+  <ul class="messages">{% for m in listing.messages %}<li>{{ m.text }}</li>{% endfor %}</ul>
   {% endif %}
   <textarea id="message" name="message"
             placeholder="e.g. 120 x 45 cm, bought 2023, no box. Make it shorter and cheaper."></textarea>
-  <p><button class="btn" type="submit">{{ "Update draft" if draft else "Draft it" }}</button></p>
-  <p class="muted">Everything you add here is kept and used on every later update. Style wishes
+  <div class="actions"><button class="btn" type="submit">{{ "Update draft" if draft else "Draft it" }}</button></div>
+  <p class="hint">Everything you add here is kept and used on every later update. Style wishes
     (not facts about this item) also go into your <a href="/settings/style">style guide</a>.</p>
   </fieldset>
 </form>
 {% endif %}
 
-<div class="card">
-  <div class="row"><strong>Cost {{ cost | usd }}</strong>
-    <span class="muted">vision {{ listing.cost.vision | usd }} · agent {{ listing.cost.agent | usd }} · style {{ listing.cost.style | usd }}</span></div>
+<div class="costs">
+  <strong>Cost {{ cost | usd }}</strong>
+  <span>vision {{ listing.cost.vision | usd }} · agent {{ listing.cost.agent | usd }} · style {{ listing.cost.style | usd }}</span>
 </div>
 
 {% if trace %}

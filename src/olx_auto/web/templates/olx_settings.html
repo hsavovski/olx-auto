@@ -2,26 +2,29 @@
 {% block title %}OLX · olx-auto{% endblock %}
 {% block content %}
 <h1>OLX account</h1>
-{% if message %}<div class="banner">{{ message }}</div>{% endif %}
+{% if message %}<div class="banner info">{{ message }}</div>{% endif %}
 <div class="card">
   {% if error %}
-    <p class="error">{{ error }}</p>
+    <div class="banner error">{{ error }}</div>
   {% elif account %}
-    <p>Connected as <strong>{{ account.name or account.email or account.id }}</strong>
-       <span class="muted">(id {{ account.id }})</span></p>
+    <div class="row">
+      <p>Connected as <strong>{{ account.name or account.email or account.id }}</strong>
+         <span class="muted">(id {{ account.id }})</span></p>
+      <span class="pill status posted">connected</span>
+    </div>
   {% else %}
-    <p>Not connected.</p>
+    <div class="row"><p>Not connected.</p><span class="pill status">not connected</span></div>
   {% endif %}
-  <form method="post" action="/settings/olx/connect">
+  <form method="post" action="/settings/olx/connect" class="actions">
     <button class="btn" type="submit">{{ "Reconnect" if connected else "Connect" }} OLX</button>
   </form>
-  <p class="muted">Log in to OLX as the account you want to connect <em>before</em> approving.
+  <p class="hint">Log in to OLX as the account you want to connect <em>before</em> approving.
     If you're logged in as a different account, OLX connects that one instead.</p>
 </div>
 <form class="card" method="post" action="/settings/olx/code">
   <label for="code">Or paste the redirect URL / code</label>
-  <p class="muted">Use this if OLX redirects somewhere other than this app.</p>
+  <p class="hint" style="margin: 0 0 8px">Use this if OLX redirects somewhere other than this app.</p>
   <input type="text" id="code" name="code" required>
-  <p><button class="btn" type="submit">Save</button></p>
+  <div class="actions"><button class="btn secondary" type="submit">Save</button></div>
 </form>
 {% endblock %}
