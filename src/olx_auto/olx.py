@@ -143,6 +143,11 @@ class Olx:
     def districts(self, city_id):
         return self.get(f"/cities/{city_id}/districts", user=False)["data"]
 
+    def locations(self, latitude, longitude):
+        """Nearest [{city: {id, name, ...}, district: {id, name, ...} | None}, ...] to a point."""
+        params = {"latitude": latitude, "longitude": longitude}
+        return self.get("/locations", user=False, params=params)["data"]
+
     def currencies(self):
         return self.get("/currencies", user=False)["data"]
 

@@ -38,10 +38,15 @@ their profile and their style guide. Work through the tools:
 3. If something important isn't settled by the observations, use look_at_photos with a specific
    question before guessing.
 4. ask_user for what only the seller knows (age, working condition, reason for selling, missing
-   accessories). It does not wait for answers: keep going with your best guess.
+   accessories). It does not wait for answers: keep going with your best guess. Don't ask again
+   what the seller already answered or told you.
 5. submit_draft. If it returns problems, fix them and submit again.
 
-The listing is in Bulgarian. Follow the style guide. Title: what the item is, brand, model and the
+The seller's answers and messages are facts and wishes that override the observations; when two
+messages disagree, the later one wins.
+
+The listing, your questions to the seller and `price_reasoning` are all in Bulgarian. Follow the
+style guide. Title: what the item is, brand, model and the
 key spec; no "ПРОДАВАМ", no exclamation marks. Description: honest, mention every defect.
 OLX rejects phone numbers, emails and links in the text, more than 50% capital letters, and
 punctuation repeated 3+ times. Contact, location and delivery are added by the app, not by you,
@@ -72,7 +77,7 @@ TOOLS = [
     {"type": "function", "function": {
         "name": "ask_user",
         "description": "Add questions for the seller to the listing card. Non-blocking: answers arrive "
-                       "in a later run, so keep going with best guesses. Ask in English, short.",
+                       "in a later run, so keep going with best guesses. Ask in Bulgarian, short.",
         "parameters": {"type": "object", "properties": {
             "questions": {"type": "array", "items": {"type": "string"}}},
             "required": ["questions"]}}},
@@ -89,7 +94,7 @@ TOOLS = [
             "negotiable": {"type": "boolean"},
             "price_estimate": {"type": "object", "description": "Second-hand value range in EUR",
                                "properties": {"low": {"type": "number"}, "high": {"type": "number"}}},
-            "price_reasoning": {"type": "string", "description": "One or two sentences, English"},
+            "price_reasoning": {"type": "string", "description": "One or two sentences, Bulgarian"},
         }, "required": ["title", "description", "category_id", "attributes", "price"]}}},
 ]
 
@@ -111,12 +116,13 @@ class AgentInput:
     draft: dict = field(default_factory=dict)  # current draft, when refining
     locked: list[str] = field(default_factory=list)
     answered: list[dict] = field(default_factory=list)  # [{"question", "answer"}]
-    instruction: str = ""  # free-text refinement from the card
+    messages: list[str] = field(default_factory=list)  # seller's additional info / requests, oldest first
 
 
 @dataclass
 class AgentResult:
     draft: dict | None  # None when the run ended without any submitted draft
+    category: dict | None  # {id, name, photos_limit, attributes} of the draft's category, if looked up
     questions: list[str]
     problems: list[str]  # what check_draft still reports about `draft`
     stopped: str  # submitted | max_iterations | max_cost
@@ -135,7 +141,7 @@ class _Run:
     cost_vision: float = 0.0
     cost_agent: float = 0.0
     calls: list[dict] = field(default_factory=list)
-    attributes: dict[int, list[dict]] = field(default_factory=dict)
+    categories: dict[int, dict] = field(default_factory=dict)  # looked-up leaves, with attributes
     questions: list[str] = field(default_factory=list)
     draft: dict | None = None
     problems: list[str] = field(default_factory=list)
@@ -168,7 +174,9 @@ class _Run:
         if category.get("photos_limit") == 0:
             return {"error": f"{category_id} ({category.get('name')}) does not accept adverts from us"}
         attributes = self.catalog.category_attributes(category_id)
-        self.attributes[category_id] = attributes
+        self.categories[category_id] = {"id": category_id, "name": category.get("name"),
+                                        "photos_limit": category.get("photos_limit"),
+                                        "attributes": attributes}
         return {"category": {"id": category_id, "name": category.get("name"),
                              "photos_limit": category.get("photos_limit")},
                 "attributes": [_compact_attribute(a) for a in attributes]}
@@ -179,13 +187,13 @@ class _Run:
 
     def submit_draft(self, **draft):
         category_id = draft.get("category_id")
-        if isinstance(category_id, int) and category_id not in self.attributes:
+        if isinstance(category_id, int) and category_id not in self.categories:
             result = self.get_category_attributes(category_id)
             if "error" in result:
                 self.draft, self.problems = draft, [result["error"]]
                 return {"accepted": False, "problems": self.problems}
         self.draft = draft
-        self.problems = validation.check_draft(draft, self.attributes.get(category_id))
+        self.problems = validation.check_draft(draft, self.categories.get(category_id, {}).get("attributes"))
         self.accepted = not self.problems
         if self.accepted:
             return {"accepted": True}
@@ -236,8 +244,9 @@ def build_context(inp: AgentInput) -> str:
     if inp.answered:
         parts.append("## Seller's answers\n" + "\n".join(
             f"- Q: {a['question']}\n  A: {a['answer']}" for a in inp.answered))
-    if inp.instruction:
-        parts.append("## Seller's request for this revision\n" + inp.instruction)
+    if inp.messages:
+        parts.append("## Seller's additional information and requests (oldest first)\n"
+                     + "\n".join(f"- {m}" for m in inp.messages))
     return "\n\n".join(parts)
 
 
@@ -272,10 +281,11 @@ def run_agent(llm: LLM, model: str, inp: AgentInput, *, catalog: Catalog, photo_
             break
 
     draft = _apply_locks(run.draft, inp) if run.draft else None
+    category = run.categories.get(draft.get("category_id")) if draft else None
     trace = {"stage": "agent", "model": model, "stopped": stopped, "calls": run.calls,
              "messages": messages,
              "cost": {"vision": run.cost_vision, "agent": run.cost_agent}}
-    return AgentResult(draft, run.questions, run.problems, stopped,
+    return AgentResult(draft, category, run.questions, run.problems, stopped,
                        run.cost_vision, run.cost_agent, trace)
 
 

@@ -66,4 +66,37 @@ def test_listing_json_is_utf8(user):
     listing = listings.create(user, "Фотоапарат", [jpeg_bytes()])
     raw = (user.listings_dir / listing["id"] / "listing.json").read_text()
     assert "Фотоапарат" in raw
-    assert json.loads(raw)["cost"] == {"vision": 0.0, "agent": 0.0}
+    assert json.loads(raw)["cost"] == {"vision": 0.0, "agent": 0.0, "style": 0.0}
+
+
+def test_old_listing_json_gets_new_fields(user):
+    listing = listings.create(user, "", [jpeg_bytes()])
+    path = user.listings_dir / listing["id"] / "listing.json"
+    old = {k: v for k, v in listing.items() if k not in ("messages", "edits", "learned", "category")}
+    old["cost"] = {"vision": 0.1, "agent": 0.2}
+    path.write_text(json.dumps(old))
+    loaded = listings.load(user, listing["id"])
+    assert loaded["messages"] == [] and loaded["learned"] == {"messages": 0, "edits": 0}
+    assert loaded["cost"] == {"vision": 0.1, "agent": 0.2, "style": 0.0}
+
+
+def test_edit_draft_locks_and_records_changes():
+    listing = {"draft": {"title": "Стара", "price": 45, "attributes": {"state": "used", "d": ["209", "207"]}},
+               "locked": [], "edits": []}
+    changed = listings.edit_draft(listing, {"title": "Нова", "price": 45.0,
+                                            "attributes": {"state": "used", "d": ["207", "209"]}})
+    assert changed == ["title"]  # same price and same attributes in another order are no change
+    assert listing["locked"] == ["title"]
+    assert listing["edits"][0] | {"at": None} == {"at": None, "field": "title", "before": "Стара",
+                                                  "after": "Нова"}
+    with pytest.raises(ValueError):
+        listings.edit_draft(listing, {"category_id": 1})
+
+
+def test_is_running_ignores_stale_progress():
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    assert listings.is_running({"progress": "x", "updated_at": now.isoformat()})
+    assert not listings.is_running({"progress": None, "updated_at": now.isoformat()})
+    assert not listings.is_running({"progress": "x", "updated_at": (now - timedelta(hours=1)).isoformat()})

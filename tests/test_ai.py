@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 from openai.types.chat import ChatCompletion
 
-from olx_auto import agent, drafting, listings, validation, vision
+from olx_auto import agent, drafting, listings, style, validation, vision
 from olx_auto.llm import LLM, LLMError, Reply, parse_json
 from tests.conftest import jpeg_bytes
 
@@ -251,19 +251,31 @@ def test_cost_cap_stops_the_run():
     assert len(llm.requests) == 2
 
 
+
+
 def test_locked_fields_survive_the_run_and_refinement_context():
     current = {**GOOD_DRAFT, "title": "Моето заглавие за количката", "price": 45}
     inp = agent.AgentInput(observations=OBSERVATIONS, draft=current, locked=["title", "price"],
                            answered=[{"question": "How old?", "answer": "2 години"}],
-                           instruction="спомени дъждобрана")
+                           messages=["има дъждобран", "спомени дъждобрана"])
     llm = FakeLLM(tool_reply(("submit_draft", GOOD_DRAFT)))
     result = run(llm, inp)
     assert result.draft["title"] == "Моето заглавие за количката"
     assert result.draft["price"] == 45
     assert result.draft["description"] == GOOD_DRAFT["description"]
+    assert result.category["name"] == "Детски колички"
+    assert result.category["attributes"] == STROLLER_ATTRS
     context = llm.requests[0]["messages"][1]["content"]
-    for expected in ("## Locked fields", "2 години", "спомени дъждобрана", "## Current draft"):
+    for expected in ("## Locked fields", "2 години", "- има дъждобран\n- спомени дъждобрана",
+                     "## Current draft"):
         assert expected in context
+
+
+def test_agent_writes_questions_and_reasoning_in_bulgarian():
+    tools = {t["function"]["name"]: t["function"] for t in agent.TOOLS}
+    assert "Ask in Bulgarian" in tools["ask_user"]["description"]
+    assert tools["submit_draft"]["parameters"]["properties"]["price_reasoning"]["description"].endswith(
+        "Bulgarian")
 
 
 # ---- drafting (listing on disk) -------------------------------------------------
@@ -274,44 +286,104 @@ def ai_settings(settings):
                    agent_model="agent-model")
 
 
+def learn_reply(changed=True, guide=None, summary="Без „Продавам“ в началото на описанието."):
+    if not changed:
+        return text_reply('{"changed": false}', model="agent-model")
+    guide = guide or ("# Ръководство\n\n## Описание\n- Не започвай описанието с „Продавам“.\n"
+                      "- Не пиши какво не е известно за вещта.\n")
+    return text_reply(json.dumps({"changed": True, "guide": guide, "summary": summary},
+                                 ensure_ascii=False), cost=0.004, model="agent-model")
+
+
 def test_generate_writes_draft_costs_and_trace(ai_settings, user):
     listing = listings.create(user, "Chicco", [jpeg_bytes(), jpeg_bytes()])
     llm = FakeLLM(
         text_reply(json.dumps(OBSERVATIONS), cost=0.003),
-        tool_reply(("ask_user", {"questions": ["How old is it?"]}), ("submit_draft", GOOD_DRAFT)),
+        tool_reply(("ask_user", {"questions": ["На колко години е?"]}), ("submit_draft", GOOD_DRAFT)),
     )
     out = drafting.generate(ai_settings, user, listing["id"], llm=llm, catalog=FakeCatalog())
 
+    assert len(llm.requests) == 2  # no feedback yet, so no style learning call
     saved = listings.load(user, listing["id"])
     assert saved == out
     assert saved["observations"] == OBSERVATIONS
-    assert saved["draft"] == GOOD_DRAFT
-    assert saved["questions"] == [{"id": 1, "question": "How old is it?", "answer": None}]
+    assert saved["draft"] == saved["ai_draft"] == GOOD_DRAFT
+    assert saved["category"]["id"] == 185 and saved["category"]["attributes"] == STROLLER_ATTRS
+    assert saved["questions"] == [{"id": 1, "question": "На колко години е?", "answer": None}]
     assert saved["progress"] is None and saved["ai_error"] is None
-    assert saved["cost"] == {"vision": pytest.approx(0.003), "agent": pytest.approx(0.01)}
+    assert saved["cost"] == {"vision": pytest.approx(0.003), "agent": pytest.approx(0.01), "style": 0.0}
     trace = json.loads(listings.trace_path(user, listing["id"]).read_text())
     assert [r["stage"] for r in trace["runs"]] == ["vision", "agent"]
     assert "base64" not in json.dumps(trace)
     assert "+359" not in json.dumps(llm.requests[1]["messages"])  # contact stays out of the prompt
 
 
-def test_refinement_skips_vision_and_keeps_answers(ai_settings, user):
+def test_refinement_skips_vision_keeps_answers_and_learns_style(ai_settings, user):
     listing = listings.create(user, "", [jpeg_bytes()])
     listing.update(observations=OBSERVATIONS, draft=GOOD_DRAFT, cost={"vision": 0.003, "agent": 0.01},
                    questions=[{"id": 1, "question": "How old?", "answer": "2 години"},
                               {"id": 2, "question": "Box?", "answer": None}])
+    listings.add_message(listing, "по-евтино и без „Продавам“ в началото")
     listings.save(user, listing)
-    llm = FakeLLM(tool_reply(("ask_user", {"questions": ["Colour?"]}),
-                             ("submit_draft", {**GOOD_DRAFT, "price": 55})))
+    old_guide = user.style_guide_file.read_text()
+    llm = FakeLLM(tool_reply(("ask_user", {"questions": ["Цвят?"]}),
+                             ("submit_draft", {**GOOD_DRAFT, "price": 55})),
+                  learn_reply())
 
-    out = drafting.generate(ai_settings, user, listing["id"], instruction="по-евтино", llm=llm,
-                            catalog=FakeCatalog())
+    out = drafting.generate(ai_settings, user, listing["id"], llm=llm, catalog=FakeCatalog())
 
-    assert len(llm.requests) == 1 and llm.requests[0]["model"] == "agent-model"
+    assert [r["model"] for r in llm.requests] == ["agent-model", "agent-model"]
+    assert "по-евтино" in llm.requests[0]["messages"][1]["content"]
     assert out["draft"]["price"] == 55
     assert out["questions"] == [{"id": 1, "question": "How old?", "answer": "2 години"},
-                                {"id": 3, "question": "Colour?", "answer": None}]
+                                {"id": 3, "question": "Цвят?", "answer": None}]
     assert out["cost"]["agent"] == pytest.approx(0.02)
+    assert out["cost"]["style"] == pytest.approx(0.004)
+    assert out["learned"] == {"messages": 1, "edits": 0}
+    assert out["progress"] is None and out["ai_error"] is None
+    # the learner saw the message and the complete listing
+    learn_input = llm.requests[1]["messages"][1]["content"]
+    assert "по-евтино" in learn_input and GOOD_DRAFT["description"] in learn_input
+    assert "Не започвай описанието с „Продавам“" in user.style_guide_file.read_text()
+    [entry] = style.log(user)
+    assert entry["source"] == listing["id"] and entry["summary"].startswith("Без „Продавам“")
+    assert (user.style_history_dir / entry["backup"]).read_text() == old_guide
+
+
+def test_learn_style_only_sends_new_feedback(ai_settings, user):
+    listing = listings.create(user, "", [jpeg_bytes()])
+    listing["draft"] = dict(GOOD_DRAFT)
+    edited = "Детска количка Chicco, използвана две години. Леко протрита."
+    listings.edit_draft(listing, {"description": edited})
+    listings.edit_draft(listing, {"attributes": {"state": "new"}})  # a fact: not sent
+    listings.save(user, listing)
+    guide = user.style_guide_file.read_text()
+
+    llm = FakeLLM(learn_reply(changed=False))
+    assert drafting.learn_style(ai_settings, user, listing["id"], llm=llm) is None
+    feedback = llm.requests[0]["messages"][1]["content"]
+    assert "използвана две години" in feedback and '"state"' not in feedback.split("## New feedback")[1]
+    assert user.style_guide_file.read_text() == guide and style.log(user) == []
+
+    # nothing new: no call at all
+    assert drafting.learn_style(ai_settings, user, listing["id"], llm=FakeLLM()) is None
+    assert listings.load(user, listing["id"])["learned"] == {"messages": 0, "edits": 2}
+
+
+def test_truncated_guide_is_rejected_and_draft_kept(ai_settings, user):
+    listing = listings.create(user, "", [jpeg_bytes()])
+    listing.update(observations=OBSERVATIONS)
+    listings.add_message(listing, "по-кратко")
+    listings.save(user, listing)
+    guide = user.style_guide_file.read_text()
+    llm = FakeLLM(tool_reply(("submit_draft", GOOD_DRAFT)), learn_reply(guide="# Кратко"))
+
+    out = drafting.generate(ai_settings, user, listing["id"], llm=llm, catalog=FakeCatalog())
+
+    assert out["draft"] == GOOD_DRAFT
+    assert out["ai_error"].startswith("Style guide update failed")
+    assert out["progress"] is None
+    assert user.style_guide_file.read_text() == guide
 
 
 def test_generate_records_errors(ai_settings, user):
@@ -326,35 +398,20 @@ def test_generate_records_errors(ai_settings, user):
     assert out["progress"] is None
 
 
-# ---- web -------------------------------------------------------------------------
+# ---- style guide storage ------------------------------------------------------------
 
-def test_upload_starts_drafting_in_background(ai_settings, user, monkeypatch):
-    from fastapi.testclient import TestClient
+def test_write_and_revert_guide(user):
+    original = user.style_guide_file.read_text()
+    style.write_guide(user, "# Първа версия\n" + "x" * 50, summary="Ръчна редакция", source="manual")
+    style.write_guide(user, "# Втора версия\n" + "y" * 50, summary="Научено", source="20261123-000000-abcd")
+    style.write_guide(user, "# Втора версия\n" + "y" * 50, summary="същото", source="manual")  # no-op
+    second, first = style.log(user)
+    assert (second["summary"], first["summary"]) == ("Научено", "Ръчна редакция")
+    assert second["backup"] != first["backup"]
 
-    from olx_auto.web.app import create_app
-    from tests.conftest import PASSWORD
-
-    started = []
-    monkeypatch.setattr(drafting, "generate", lambda s, u, listing_id: started.append(listing_id))
-    client = TestClient(create_app(ai_settings))
-    client.post("/login", data={"username": "ico", "password": PASSWORD})
-    r = client.post("/listings", files=[("photos", ("a.jpg", jpeg_bytes(), "image/jpeg"))],
-                    follow_redirects=False)
-    listing_id = r.headers["location"].rsplit("/", 1)[1]
-    assert started == [listing_id]
-
-    listing = listings.load(user, listing_id)
-    listings.save(user, {**listing, "progress": "Choosing category…"})
-    page = client.get(f"/listings/{listing_id}")
-    assert "Choosing category…" in page.text and 'http-equiv="refresh"' in page.text
-
-    listings.save(user, {**listing, "draft": GOOD_DRAFT,
-                         "questions": [{"id": 1, "question": "How old is it?", "answer": None}]})
-    page = client.get(f"/listings/{listing_id}")
-    assert GOOD_DRAFT["title"] in page.text and "€60" in page.text and "How old is it?" in page.text
-
-
-def test_upload_without_openrouter_key_does_not_draft(logged_in, monkeypatch):
-    monkeypatch.setattr(drafting, "generate", lambda *a: pytest.fail("should not run"))
-    r = logged_in.post("/listings", files=[("photos", ("a.jpg", jpeg_bytes(), "image/jpeg"))])
-    assert r.status_code == 200
+    style.revert(user, first["backup"])
+    assert user.style_guide_file.read_text() == original
+    assert style.log(user)[0]["source"] == "revert"
+    for bad in ("../user.json", "nope.md"):
+        with pytest.raises(KeyError):
+            style.revert(user, bad)

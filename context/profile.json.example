@@ -7,8 +7,9 @@
   },
   "location": {
     "city_id": null,
+    "city_name": null,
     "district_id": null,
-    "note": "Find ids with `olx-auto check` / the /cities endpoint"
+    "district_name": null
   },
   "delivery": {
     "courier": true,

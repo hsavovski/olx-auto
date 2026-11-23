@@ -1,4 +1,5 @@
-"""FastAPI app: login, listings (upload + view), Connect OLX settings."""
+"""FastAPI app: login, listings (upload, card: edit/lock/refine), style guide, Connect OLX settings."""
+import json
 import secrets
 import time
 import urllib.parse
@@ -10,7 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import drafting, listings, users
+from .. import drafting, listings, profiles, style, users, validation
 from ..config import Settings
 from ..olx import OlxError
 from ..photos import InvalidPhoto
@@ -100,8 +101,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except (ValueError, InvalidPhoto) as e:
             return render(request, "new_listing.html", 400, user=user, error=str(e), note=note)
         if settings.openrouter_api_key:
-            background.add_task(drafting.generate, settings, user, listing["id"])
+            _start(background, drafting.generate, user, listing["id"])
         return redirect(f"/listings/{listing['id']}")
+
+    def _start(background: BackgroundTasks, task, user: users.User, listing_id: str) -> None:
+        """Mark the run as started now, so the page the user lands on already shows progress."""
+        drafting.mark_started(user, listing_id)
+        background.add_task(task, settings, user, listing_id)
+
+    def _editable(request: Request, user: users.User, listing_id: str):
+        """The listing, or a response: 404 for a foreign/unknown id, back to the card while a run is going."""
+        try:
+            listing = listings.load(user, listing_id)
+        except KeyError:
+            return None, render(request, "not_found.html", 404, user=user)
+        if listings.is_running(listing):
+            return None, redirect(f"/listings/{listing_id}")
+        return listing, None
 
     @app.get("/listings/{listing_id}")
     def listing_page(request: Request, user: CurrentUser, listing_id: str):
@@ -109,8 +125,158 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             listing = listings.load(user, listing_id)
         except KeyError:
             return render(request, "not_found.html", 404, user=user)
-        return render(request, "listing.html", user=user, listing=listing,
-                      cost=listings.total_cost(listing))
+        trace = None
+        path = listings.trace_path(user, listing_id)
+        if settings.show_trace and path.exists():
+            trace = json.loads(path.read_text())["runs"]
+        category = listing["category"] or {}
+        return render(request, "listing.html", user=user, listing=listing, draft=listing["draft"],
+                      running=listings.is_running(listing), category=category,
+                      attributes=category.get("attributes") or [], profile=profiles.load(user),
+                      cost=listings.total_cost(listing), trace=trace,
+                      ai_enabled=bool(settings.openrouter_api_key))
+
+    @app.post("/listings/{listing_id}/edit")
+    async def edit_listing(request: Request, user: CurrentUser, listing_id: str,
+                           background: BackgroundTasks):
+        listing, response = _editable(request, user, listing_id)
+        if response:
+            return response
+        form = await request.form()
+        changes = {"title": str(form.get("title", "")).strip(),
+                   "description": str(form.get("description", "")).strip(),
+                   "negotiable": form.get("negotiable") == "on"}
+        try:
+            changes["price"] = float(str(form.get("price", "")).replace(",", "."))
+        except ValueError:
+            pass  # an unparsable price keeps the old one
+        else:
+            changes["price"] = int(changes["price"]) if changes["price"].is_integer() else changes["price"]
+        definitions = (listing["category"] or {}).get("attributes") or []
+        if definitions:
+            attrs = {}
+            for a in definitions:
+                values = [v for v in form.getlist(f"attr_{a['code']}") if v]
+                if values:
+                    multiple = (a.get("validation") or {}).get("allow_multiple_values")
+                    attrs[a["code"]] = values if multiple else values[0]
+            changes["attributes"] = attrs
+        changed = listings.edit_draft(listing, changes)
+        listing["problems"] = validation.check_draft(listing["draft"], definitions or None)
+        listings.save(user, listing)
+        if settings.openrouter_api_key and set(changed) & set(drafting.STYLE_FIELDS):
+            _start(background, drafting.try_learn_style, user, listing_id)
+        return redirect(f"/listings/{listing_id}")
+
+    @app.post("/listings/{listing_id}/unlock/{field}")
+    def unlock_field(request: Request, user: CurrentUser, listing_id: str, field: str):
+        listing, response = _editable(request, user, listing_id)
+        if response:
+            return response
+        if field in listing["locked"]:
+            listing["locked"].remove(field)
+            listings.save(user, listing)
+        return redirect(f"/listings/{listing_id}")
+
+    @app.post("/listings/{listing_id}/refine")
+    async def refine_listing(request: Request, user: CurrentUser, listing_id: str,
+                             background: BackgroundTasks):
+        listing, response = _editable(request, user, listing_id)
+        if response:
+            return response
+        form = await request.form()
+        for q in listing["questions"]:
+            answer = str(form.get(f"answer_{q['id']}", "")).strip()
+            if answer:
+                q["answer"] = answer
+        listings.add_message(listing, str(form.get("message", "")))
+        listings.save(user, listing)
+        if settings.openrouter_api_key:
+            _start(background, drafting.generate, user, listing_id)
+        return redirect(f"/listings/{listing_id}")
+
+    # ---- profile ----------------------------------------------------------
+    def _profile_page(request: Request, user: users.User, status_code: int = 200, **ctx):
+        return render(request, "profile.html", status_code, user=user, profile=profiles.load(user),
+                      message=request.query_params.get("message"), **ctx)
+
+    @app.get("/settings/profile")
+    def profile_page(request: Request, user: CurrentUser, lat: float | None = None,
+                     lng: float | None = None):
+        if lat is None or lng is None:
+            return _profile_page(request, user)
+        try:
+            choices = profiles.location_choices(user.olx(settings).locations(lat, lng))
+        except (OlxError, OSError) as e:
+            return _profile_page(request, user, location_error=f"OLX location lookup failed: {e}")
+        return _profile_page(request, user, choices=choices, lat=lat, lng=lng)
+
+    @app.post("/settings/profile")
+    def profile_save(request: Request, user: CurrentUser,
+                     display_name: Annotated[str, Form()] = "", name: Annotated[str, Form()] = "",
+                     phone: Annotated[str, Form()] = "", email: Annotated[str, Form()] = "",
+                     advertiser_type: Annotated[str, Form()] = "private",
+                     courier: Annotated[bool, Form()] = False,
+                     delivery_note: Annotated[str, Form()] = ""):
+        profile = profiles.load(user)
+        errors = profiles.update_details(profile, name=name, phone=phone, email=email,
+                                         advertiser_type=advertiser_type, courier=courier,
+                                         delivery_note=delivery_note)
+        if errors:
+            return _profile_page(request, user, 400, errors=errors)
+        profiles.save(user, profile)
+        users.set_display_name(user, display_name)
+        return redirect("/settings/profile?message=Saved")
+
+    @app.post("/settings/profile/location")
+    def profile_location(request: Request, user: CurrentUser, lat: Annotated[float, Form()],
+                         lng: Annotated[float, Form()], choice: Annotated[int, Form()]):
+        # Look the point up again rather than trusting ids and names sent back by the browser
+        try:
+            choices = profiles.location_choices(user.olx(settings).locations(lat, lng))
+        except (OlxError, OSError) as e:
+            return _profile_page(request, user, 502, location_error=f"OLX location lookup failed: {e}")
+        if not 0 <= choice < len(choices):
+            return _profile_page(request, user, 400, location_error="Pick one of the places")
+        profile = profiles.load(user)
+        profiles.set_location(profile, **choices[choice])
+        profiles.save(user, profile)
+        return redirect("/settings/profile?message=Location+saved")
+
+    @app.post("/settings/password")
+    def password_change(request: Request, user: CurrentUser, current: Annotated[str, Form()],
+                        new: Annotated[str, Form()], repeat: Annotated[str, Form()]):
+        error = None
+        if not users.authenticate(settings.data_dir, user.name, current):
+            time.sleep(1)  # slow down guessing, as on /login
+            error = "Current password is wrong"
+        elif len(new) < 8:
+            error = "New password must be at least 8 characters"
+        elif new != repeat:
+            error = "New passwords don't match"
+        if error:
+            return _profile_page(request, user, 400, password_error=error)
+        users.set_password(user, new)
+        return redirect("/settings/profile?message=Password+changed")
+
+    # ---- style guide ------------------------------------------------------
+    @app.get("/settings/style")
+    def style_page(request: Request, user: CurrentUser):
+        return render(request, "style.html", user=user, guide=style.read_guide(user),
+                      log=style.log(user), message=request.query_params.get("message"))
+
+    @app.post("/settings/style")
+    def style_save(user: CurrentUser, guide: Annotated[str, Form()]):
+        style.write_guide(user, guide, summary="Ръчна редакция", source="manual")
+        return redirect("/settings/style?message=Saved")
+
+    @app.post("/settings/style/revert/{backup}")
+    def style_revert(request: Request, user: CurrentUser, backup: str):
+        try:
+            style.revert(user, backup)
+        except KeyError:
+            return render(request, "not_found.html", 404, user=user)
+        return redirect("/settings/style?message=Reverted")
 
     @app.get("/listings/{listing_id}/photos/{name}")
     def listing_photo(user: CurrentUser, listing_id: str, name: str):

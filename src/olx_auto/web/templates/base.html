@@ -30,10 +30,24 @@
     .btn.big { display: block; width: 100%; padding: 18px; font-size: 18px; margin-bottom: 16px; }
     .btn.link { background: none; color: var(--accent); padding: 0; font-weight: 400; }
     label { display: block; font-weight: 600; margin: 12px 0 4px; }
-    input[type=text], input[type=password], textarea {
+    input[type=text], input[type=password], textarea, select {
       width: 100%; padding: 10px; font: inherit; border: 1px solid var(--line); border-radius: 8px;
       background: var(--bg); color: var(--fg); }
     textarea { min-height: 90px; }
+    fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+    label.check { display: inline-flex; gap: 6px; align-items: center; font-weight: 400; margin: 4px 12px 4px 0; }
+    .field-label { margin-top: 12px; }
+    .field-label label { margin: 0 0 4px; }
+    .lock { font-size: 13px; }
+    .attr { margin: 8px 0; }
+    .price input[type=text] { max-width: 140px; }
+    label.question { font-weight: 400; }
+    ul.problems, ul.messages { margin: 6px 0; padding-left: 20px; }
+    .trace pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; margin: 4px 0; }
+    .trace h3 { font-size: 14px; margin: 16px 0 4px; }
+    .trace .msg { border-top: 1px solid var(--line); padding: 6px 0; }
+    .location-choice { display: flex; margin: 8px 0; }
+    .log-entry { padding: 10px 0; border-bottom: 1px solid var(--line); align-items: flex-start; }
     .muted { color: var(--muted); font-size: 14px; }
     .error { color: var(--err); font-weight: 600; }
     .banner { background: var(--warn-bg); border-radius: 10px; padding: 12px; margin-bottom: 16px; }
@@ -52,7 +66,8 @@
   <header>
     <a class="brand" href="/">olx-auto</a>
     <nav>
-      <span class="muted">{{ user.display_name }}</span>
+      <a href="/settings/profile">{{ user.display_name }}</a>
+      <a href="/settings/style">Style</a>
       <a href="/settings/olx">OLX</a>
       <form class="inline" method="post" action="/logout"><button class="btn link">Log out</button></form>
     </nav>

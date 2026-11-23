@@ -35,12 +35,12 @@ Secondary goal: learn how to build AI tools. The agent is deliberately hand-writ
 2. **New listing**: pick photos (camera *or* gallery), optional short note (any language) → upload.
 3. **Draft is generated in the background** (≈20–60 s). The page shows live progress ("Reading photos… Choosing category… Checking comparables…"). State is on disk, so the phone can be closed and the user can come back later.
 4. **Listing card** shows a best-guess draft immediately, rendered as it will look:
-   - editable fields: title, description, category, attributes, price, location, contact, delivery;
+   - editable fields: title, description, attributes (incl. delivery), price. Category is changed by telling the agent ("wrong category, it's …"); contact and location come from the profile and are shown read-only;
    - **price panel**: AI estimate vs. OLX comparables (median, n, links) → suggested price (editable);
-   - **questions** from the agent for things it could not tell (condition, accessories, required attributes). Answering one refines the draft;
-   - a free-text box for refinement ("make it cheaper, mention the original box");
+   - **questions** from the agent (in Bulgarian) for things it could not tell (condition, accessories, required attributes). Answering one refines the draft;
+   - an **additional information** box for facts and change requests ("120 x 45 cm, no box; make it cheaper"). Every message is kept on the listing and given to every later run of it, so information is never lost between refinements;
    - fields edited by hand are **locked** (lock icon, tap to unlock), and the agent treats them as fixed;
-   - **cost** of this listing so far (vision + agent, including all refinements);
+   - **cost** of this listing so far (vision + agent + style learning, including all refinements);
    - optional collapsible **trace panel** ("how the agent got here"), shown when `SHOW_TRACE=true`.
 5. **Submit**, enabled only when validation passes (§8) → images uploaded to S3 → advert created on OLX → S3 objects deleted → status `posted` with link. The card *is* the approval step: there is no staging on OLX.
    - A created advert isn't live yet. Its OLX status is shown next to `posted` and refreshed from the API: `disabled`/`new` → **pending moderation**; `limited` → **needs payment** (the category's free quota is used up; the user pays in the OLX app); `active` → **live**; `moderated`/`blocked` → **rejected by OLX**.
@@ -74,8 +74,16 @@ Tools:
 Rules:
 - **Non-blocking questions**: always produce a best-guess draft; questions refine it later.
 - **Guardrails**: max iterations (default 15) and max cost per run (default $0.50), both configurable. On hitting a cap, the run stops and keeps the best draft so far.
-- **Refinement** (answers, free text) reruns the agent stage with the current draft + locked fields. Vision is not rerun.
-- Listing content (title, description, attributes) is **Bulgarian**. The UI is English.
+- **Refinement** (answers, additional information) reruns the agent stage with the current draft + locked fields + all messages. Vision is not rerun.
+- Listing content (title, description, attributes) and everything the agent writes for the seller (questions, price reasoning, style guide change notes) is **Bulgarian**. The UI is English.
+
+### Style learning
+
+So the seller doesn't repeat the same feedback on every listing, the style guide improves itself:
+- **Feedback** = new additional-information messages, and hand edits of title, description or price (attribute edits are facts, not style).
+- After each agent run, and after hand edits of text, a learner call (`AGENT_MODEL`) gets the current guide, the **complete listing** as it now stands and the new feedback. It keeps only general preferences (tone, structure, wording, what to always/never write, pricing habits), ignores facts about the item, and merges them into the guide.
+- Every change is applied immediately, backed up and logged with a one-sentence reason (Bulgarian) and the listing it came from. The **Style** page shows the guide (editable by hand) and the change log with **Undo**.
+- Feedback is learned once: the listing records how much of it has been used.
 
 ### Traces & cost
 
@@ -84,8 +92,8 @@ Rules:
 
 ## 6. Context (per user)
 
-- `profile.json`: structured, mapped into the payload by code: contact name, phone, email, default `city_id`/`district_id`, `advertiser_type` (`private`), delivery/courier preferences.
-- `style_guide.md`: Bulgarian prose for the LLM: tone, structure, what to always mention, what to avoid.
+- `profile.json`: structured, mapped into the payload by code: contact name, phone, email, default `city_id`/`district_id`, `advertiser_type` (`private`), delivery/courier preferences. Edited on the **Profile** page (with display name and password); the location is picked from the nearest OLX cities/districts to the phone's position.
+- `style_guide.md`: Bulgarian prose for the LLM: tone, structure, what to always mention, what to avoid. Edited by hand on the Style page and updated by style learning (§5).
 - A new user starts from committed `context/*.example` files.
 
 ## 7. Pricing
@@ -120,9 +128,11 @@ data/users/<user>/
   user.json          # display name, password hash
   profile.json
   style_guide.md
+  style_guide_history/<timestamp>.md   # the guide before each change
+  style_guide_log.json                 # what changed, why, from which listing
   olx_token.json     # chmod 600
   listings/<id>/
-    listing.json     # draft, status, locked fields, questions, costs, OLX advert id/url
+    listing.json     # draft, status, locked fields, questions, messages, edits, costs, OLX advert id/url
     photos/          # processed JPEGs
     trace.json
 ```
@@ -142,7 +152,7 @@ Global config in `.env`: OLX `client_id`/`client_secret`, OpenRouter key, `VISIO
 
 The spike comes first, because its answers can change the design. After the skeleton (storage layout) exists, vision, comparables and UI work can proceed in parallel.
 
-Progress (2026-11-23): **steps 1–4 are done**; steps 5 and 6 are next. Steps 3–4 are tested offline only; no real drafting run on photos yet.
+Progress (2026-11-23): **steps 1–5 are done**; step 6 is next. One real drafting run on photos (test account) worked end to end.
 
 | Step | Status | Where |
 |---|---|---|
@@ -150,7 +160,7 @@ Progress (2026-11-23): **steps 1–4 are done**; steps 5 and 6 are next. Steps 3
 | 2. Skeleton | ✅ done | `src/olx_auto/`, `docs/ARCHITECTURE.md` |
 | 3. Vision stage | ✅ done | `vision.py`, `llm.py` |
 | 4. Agent loop + tools | ✅ done (no comparables tool until step 7) | `agent.py`, `drafting.py`, `olx-auto draft` |
-| 5. Listing card UI | not started (page shows progress, draft text and questions, read-only) | |
+| 5. Listing card UI | ✅ done, plus style learning (§5) | `web/templates/listing.html`, `style.py`, Style page |
 | 6. Validation + submit | content/length/attribute checks done in `validation.py`; location, contact, photo count and submit not started (S3 bucket and IAM user exist) | |
 | 7. Comparables scraper | not started | |
 | 8. Polish | not started | |

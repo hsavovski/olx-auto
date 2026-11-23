@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
 import shutil
@@ -31,6 +32,14 @@ class User:
     @property
     def style_guide_file(self) -> Path:
         return self.dir / "style_guide.md"
+
+    @property
+    def style_history_dir(self) -> Path:
+        return self.dir / "style_guide_history"
+
+    @property
+    def style_log_file(self) -> Path:
+        return self.dir / "style_guide_log.json"
 
     @property
     def token_file(self) -> Path:
@@ -99,10 +108,20 @@ def create_user(data_dir: Path, name: str, password: str, display_name: str | No
     return user
 
 
-def set_password(user: User, password: str) -> None:
+def _update_meta(user: User, **fields) -> None:
     meta = json.loads(user.meta_file.read_text())
-    meta["password"] = hash_password(password)
-    user.meta_file.write_text(json.dumps(meta, indent=2))
+    meta.update(fields)
+    tmp = user.meta_file.with_suffix(".tmp")
+    tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+    os.replace(tmp, user.meta_file)
+
+
+def set_password(user: User, password: str) -> None:
+    _update_meta(user, password=hash_password(password))
+
+
+def set_display_name(user: User, display_name: str) -> None:
+    _update_meta(user, display_name=display_name.strip() or user.name)
 
 
 def authenticate(data_dir: Path, name: str, password: str) -> User | None:

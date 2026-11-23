@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Profile · olx-auto{% endblock %}
+{% block content %}
+<h1>Profile</h1>
+{% if message %}<div class="banner">{{ message }}</div>{% endif %}
+
+<form class="card" method="post" action="/settings/profile">
+  {% for e in errors or [] %}<p class="error">{{ e }}</p>{% endfor %}
+  <label for="display_name">Display name</label>
+  <input type="text" id="display_name" name="display_name" value="{{ user.display_name }}">
+  <p class="muted">Shown in this app only. You log in as <strong>{{ user.name }}</strong>.</p>
+
+  <label for="name">Contact name on adverts</label>
+  <input type="text" id="name" name="name" value="{{ profile.contact.name or '' }}" required>
+  <label for="phone">Phone</label>
+  <input type="text" id="phone" name="phone" inputmode="tel" value="{{ profile.contact.phone or '' }}"
+         placeholder="+359…">
+  <label for="email">Email</label>
+  <input type="text" id="email" name="email" inputmode="email" value="{{ profile.contact.email or '' }}">
+
+  <label for="advertiser_type">Advertiser type</label>
+  <select id="advertiser_type" name="advertiser_type">
+    <option value="private" {% if profile.advertiser_type == "private" %}selected{% endif %}>Private person</option>
+    <option value="business" {% if profile.advertiser_type == "business" %}selected{% endif %}>Business</option>
+  </select>
+
+  <label>Delivery</label>
+  <label class="check"><input type="checkbox" name="courier" value="true"
+    {% if profile.delivery.courier %}checked{% endif %}> Offer OLX delivery (courier)</label>
+  <label for="delivery_note" class="question">Delivery preferences for the agent (Bulgarian)</label>
+  <input type="text" id="delivery_note" name="delivery_note" value="{{ profile.delivery.note or '' }}"
+         placeholder="напр. лично предаване в центъра или OLX доставка за сметка на купувача">
+
+  <p><button class="btn" type="submit">Save</button></p>
+</form>
+
+<div class="card">
+  <label>Location</label>
+  {% if profile.location.city_id %}
+  <p>{{ profile.location.city_name or "City" }}{% if profile.location.district_name %}, {{ profile.location.district_name }}{% endif %}
+    <span class="muted">(city {{ profile.location.city_id }}{% if profile.location.district_id %}, district {{ profile.location.district_id }}{% endif %})</span></p>
+  {% else %}
+  <p class="error">Not set. Adverts can't be submitted without a location.</p>
+  {% endif %}
+  {% if location_error %}<p class="error">{{ location_error }}</p>{% endif %}
+
+  {% if choices is defined %}
+  <form method="post" action="/settings/profile/location">
+    <input type="hidden" name="lat" value="{{ lat }}"><input type="hidden" name="lng" value="{{ lng }}">
+    <p class="muted">Nearest places on OLX:</p>
+    {% for c in choices %}
+    <label class="check location-choice"><input type="radio" name="choice" value="{{ loop.index0 }}" {% if loop.first %}checked{% endif %}>
+      {{ c.city_name }}{% if c.district_name %}, {{ c.district_name }}{% endif %}</label>
+    {% else %}
+    <p class="muted">OLX found nothing near that point.</p>
+    {% endfor %}
+    {% if choices %}<p><button class="btn" type="submit">Use this place</button></p>{% endif %}
+  </form>
+  {% endif %}
+
+  <p><button class="btn" type="button" id="locate">Use my location</button></p>
+  <p class="muted" id="locate-status">Your phone's location is only used to look up the nearest OLX city
+    and district; it isn't stored.</p>
+</div>
+
+<form class="card" method="post" action="/settings/password">
+  <strong>Change password</strong>
+  {% if password_error %}<p class="error">{{ password_error }}</p>{% endif %}
+  <label for="current">Current password</label>
+  <input type="password" id="current" name="current" autocomplete="current-password" required>
+  <label for="new">New password</label>
+  <input type="password" id="new" name="new" autocomplete="new-password" minlength="8" required>
+  <label for="repeat">Repeat new password</label>
+  <input type="password" id="repeat" name="repeat" autocomplete="new-password" minlength="8" required>
+  <p><button class="btn" type="submit">Change password</button></p>
+</form>
+
+<script>
+document.getElementById("locate").addEventListener("click", () => {
+  const status = document.getElementById("locate-status");
+  if (!navigator.geolocation) { status.textContent = "This browser can't share its location."; return; }
+  status.textContent = "Finding you…";
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const lat = pos.coords.latitude.toFixed(5), lng = pos.coords.longitude.toFixed(5);
+      location.href = `/settings/profile?lat=${lat}&lng=${lng}`;
+    },
+    (err) => { status.textContent = `Couldn't get the location (${err.message}). It needs HTTPS, e.g. the tailnet URL.`; },
+    {enableHighAccuracy: false, timeout: 15000});
+});
+</script>
+{% endblock %}

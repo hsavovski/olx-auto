@@ -89,9 +89,11 @@ def cmd_draft(settings: Settings, args) -> None:
     except KeyError:
         sys.exit(f"No such listing: {args.listing_id}")
     if args.fresh:
-        listing.update(observations=None, draft={}, locked=[], questions=[])
-        listings.save(user, listing)
-    listing = drafting.generate(settings, user, args.listing_id, instruction=args.instruction)
+        listing.update(observations=None, category=None, draft={}, ai_draft={}, locked=[], questions=[],
+                       messages=[], edits=[], learned={"messages": 0, "edits": 0})
+    listings.add_message(listing, args.message)
+    listings.save(user, listing)
+    listing = drafting.generate(settings, user, args.listing_id)
     if listing.get("ai_error"):
         sys.exit(f"Failed: {listing['ai_error']}")
     print(json.dumps({k: listing.get(k) for k in ("draft", "questions", "problems", "agent_stopped")},
@@ -130,8 +132,10 @@ def main(argv=None) -> None:
     s = sub.add_parser("draft", help="(re)draft a listing with the AI (vision + agent)")
     s.add_argument("name")
     s.add_argument("listing_id")
-    s.add_argument("--instruction", default="", help="refinement request, as from the card")
-    s.add_argument("--fresh", action="store_true", help="drop observations, draft, locks and questions")
+    s.add_argument("-m", "--message", default="",
+                   help="additional information or a change request, as on the card (kept for later runs)")
+    s.add_argument("--fresh", action="store_true",
+                   help="drop observations, draft, locks, questions and messages")
     s.set_defaults(fn=cmd_draft)
 
     args = p.parse_args(argv)
