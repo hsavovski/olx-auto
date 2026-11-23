@@ -18,7 +18,15 @@
 <div class="card">
   <div class="grid">
     {% for p in listing.photos %}
-    <a href="/listings/{{ listing.id }}/photos/{{ p }}"><img src="/listings/{{ listing.id }}/photos/{{ p }}" alt=""></a>
+    <div class="photo">
+      <a href="/listings/{{ listing.id }}/photos/{{ p }}"><img src="/listings/{{ listing.id }}/photos/{{ p }}" alt=""></a>
+      {% if listing.photos | length > 1 %}
+      <form method="post" action="/listings/{{ listing.id }}/photos/{{ p }}/delete"
+            onsubmit="return confirm('Delete this photo?')">
+        <button class="btn link" {% if running %}disabled{% endif %}>Delete</button>
+      </form>
+      {% endif %}
+    </div>
     {% endfor %}
   </div>
   {% if listing.note %}<p>{{ listing.note }}</p>{% endif %}
@@ -34,10 +42,10 @@
 {% endfor %}
 
 {% if draft %}
-{% if listing.problems %}
+{% if problems %}
 <div class="card">
   <strong>To fix before submitting</strong>
-  <ul class="problems">{% for p in listing.problems %}<li>{{ p }}</li>{% endfor %}</ul>
+  <ul class="problems">{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>
 </div>
 {% endif %}
 

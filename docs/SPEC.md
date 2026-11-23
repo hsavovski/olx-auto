@@ -35,6 +35,7 @@ Secondary goal: learn how to build AI tools. The agent is deliberately hand-writ
 2. **New listing**: pick photos (camera *or* gallery), optional short note (any language) → upload.
 3. **Draft is generated in the background** (≈20–60 s). The page shows live progress ("Reading photos… Choosing category… Checking comparables…"). State is on disk, so the phone can be closed and the user can come back later.
 4. **Listing card** shows a best-guess draft immediately, rendered as it will look:
+   - photos can be deleted (at least one stays), e.g. to get under the category's photo limit;
    - editable fields: title, description, attributes (incl. delivery), price. Category is changed by telling the agent ("wrong category, it's …"); contact and location come from the profile and are shown read-only;
    - **price panel**: AI estimate vs. OLX comparables (median, n, links) → suggested price (editable);
    - **questions** from the agent (in Bulgarian) for things it could not tell (condition, accessories, required attributes). Answering one refines the draft;
@@ -161,7 +162,7 @@ Progress (2026-11-23): **steps 1–5 are done**; step 6 is next. One real drafti
 | 3. Vision stage | ✅ done | `vision.py`, `llm.py` |
 | 4. Agent loop + tools | ✅ done (no comparables tool until step 7) | `agent.py`, `drafting.py`, `olx-auto draft` |
 | 5. Listing card UI | ✅ done, plus style learning (§5) | `web/templates/listing.html`, `style.py`, Style page |
-| 6. Validation + submit | content/length/attribute checks done in `validation.py`; location, contact, photo count and submit not started (S3 bucket and IAM user exist) | |
+| 6. Validation + submit | validation done (`validation.submit_problems`), payload builder done (`adverts.py`); S3 upload, submit route, resubmit and status refresh not started (S3 bucket and IAM user exist) | |
 | 7. Comparables scraper | not started | |
 | 8. Polish | not started | |
 

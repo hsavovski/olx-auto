@@ -94,22 +94,41 @@ def test_refine_saves_answers_and_message_then_redrafts(client, user, drafted, s
     assert "Има и дъждобран" in page and 'http-equiv="refresh"' in page
 
 
+def test_delete_photo_keeps_the_last_one(client, user):
+    listing = listings.create(user, "", [jpeg_bytes(), jpeg_bytes()])
+    first = listings.photo_path(user, listing["id"], "01.jpg")
+    assert client.get(f"/listings/{listing['id']}").text.count("/delete") == 2
+
+    r = client.post(f"/listings/{listing['id']}/photos/01.jpg/delete", follow_redirects=False)
+    assert r.status_code == 303
+    assert listings.load(user, listing["id"])["photos"] == ["02.jpg"] and not first.exists()
+    assert "/delete" not in client.get(f"/listings/{listing['id']}").text
+
+    client.post(f"/listings/{listing['id']}/photos/02.jpg/delete")
+    assert listings.load(user, listing["id"])["photos"] == ["02.jpg"]
+    for name in ("01.jpg", "..%2Flisting.json"):
+        assert client.post(f"/listings/{listing['id']}/photos/{name}/delete").status_code == 404
+
+
 def test_running_listing_cannot_be_changed(client, user, drafted, started):
     drafted["progress"] = "Choosing category…"
     listings.save(user, drafted)
     client.post(f"/listings/{drafted['id']}/refine", data={"message": "x"})
     client.post(f"/listings/{drafted['id']}/edit", data={"title": "Друго заглавие за количка"})
+    client.post(f"/listings/{drafted['id']}/photos/01.jpg/delete")
     listing = listings.load(user, drafted["id"])
     assert listing["messages"] == [] and listing["draft"]["title"] == GOOD_DRAFT["title"]
+    assert listing["photos"] == ["01.jpg"]
     assert started == []
 
 
 def test_other_users_listing_is_404(client, settings, started):
     other = users.create_user(settings.data_dir, "other", PASSWORD)
-    theirs = listings.create(other, "", [jpeg_bytes()])
-    for path in ("edit", "refine", "unlock/title"):
+    theirs = listings.create(other, "", [jpeg_bytes(), jpeg_bytes()])
+    for path in ("edit", "refine", "unlock/title", "photos/01.jpg/delete"):
         assert client.post(f"/listings/{theirs['id']}/{path}", data={"message": "x"}).status_code == 404
-    assert listings.load(other, theirs["id"])["messages"] == []
+    listing = listings.load(other, theirs["id"])
+    assert listing["messages"] == [] and listing["photos"] == ["01.jpg", "02.jpg"]
 
 
 def test_trace_panel(client, user, drafted):

@@ -130,9 +130,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.show_trace and path.exists():
             trace = json.loads(path.read_text())["runs"]
         category = listing["category"] or {}
+        profile = profiles.load(user)
         return render(request, "listing.html", user=user, listing=listing, draft=listing["draft"],
                       running=listings.is_running(listing), category=category,
-                      attributes=category.get("attributes") or [], profile=profiles.load(user),
+                      attributes=category.get("attributes") or [], profile=profile,
+                      problems=validation.submit_problems(listing, profile),
                       cost=listings.total_cost(listing), trace=trace,
                       ai_enabled=bool(settings.openrouter_api_key))
 
@@ -176,6 +178,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if field in listing["locked"]:
             listing["locked"].remove(field)
             listings.save(user, listing)
+        return redirect(f"/listings/{listing_id}")
+
+    @app.post("/listings/{listing_id}/photos/{name}/delete")
+    def delete_photo(request: Request, user: CurrentUser, listing_id: str, name: str):
+        listing, response = _editable(request, user, listing_id)
+        if response:
+            return response
+        try:
+            listings.delete_photo(user, listing, name)
+        except KeyError:
+            return render(request, "not_found.html", 404, user=user)
+        except ValueError:
+            pass  # the last photo; the card hides its button
         return redirect(f"/listings/{listing_id}")
 
     @app.post("/listings/{listing_id}/refine")
@@ -232,12 +247,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def profile_location(request: Request, user: CurrentUser, lat: Annotated[float, Form()],
                          lng: Annotated[float, Form()], choice: Annotated[int, Form()]):
         # Look the point up again rather than trusting ids and names sent back by the browser
+        olx = user.olx(settings)
+        needs_district = False
         try:
-            choices = profiles.location_choices(user.olx(settings).locations(lat, lng))
+            choices = profiles.location_choices(olx.locations(lat, lng))
+            if 0 <= choice < len(choices) and choices[choice]["district_id"] is None:
+                needs_district = bool(olx.districts(choices[choice]["city_id"]))
         except (OlxError, OSError) as e:
             return _profile_page(request, user, 502, location_error=f"OLX location lookup failed: {e}")
         if not 0 <= choice < len(choices):
             return _profile_page(request, user, 400, location_error="Pick one of the places")
+        if needs_district:
+            return _profile_page(request, user, 400, location_error="This city has districts "
+                                 "(OLX needs one): pick a place with a district")
         profile = profiles.load(user)
         profiles.set_location(profile, **choices[choice])
         profiles.save(user, profile)

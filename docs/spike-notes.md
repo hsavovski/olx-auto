@@ -76,7 +76,8 @@ Ran `spikes/olx_image_spike.py`: two JPEGs uploaded to S3, posted with 7-day pre
 
 1. Moderation time from `new` to `active`, and what a rejection looks like. It didn't resolve within 3+ min, and the image post went straight to `limited`. This will show up on the first real post.
 2. Free-ad quota per category (how many, over what period). Only matters for volume.
-3. Title limits in the OLX web form (the API doesn't enforce any).
+3. Title maximum in the OLX web form (the minimum is 16; the API enforces neither).
+4. Multi-value attributes (`delivery_paid_by`): `adverts.py` sends `{code, values: [...]}`. The spike only posted single values, so the first real post with delivery settles it.
 
 ## Implications for the design
 
