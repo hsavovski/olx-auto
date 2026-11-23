@@ -100,7 +100,8 @@ def main():
                 time.sleep(10)
                 log("OLX CDN images after S3 delete:", [http_status(u) for u in cdn])
             # limited = free quota in this category used up (needs a paid package); it won't change on its own
-            if a["status"] in ("active", "limited", "moderated", "blocked", "removed_by_moderator") and s3_deleted:
+            final = ("active", "limited", "moderated", "blocked", "removed_by_moderator")
+            if a["status"] in final and s3_deleted:
                 break
             time.sleep(20)
         (OUT / "image_post_final.json").write_text(json.dumps(a, ensure_ascii=False, indent=1))

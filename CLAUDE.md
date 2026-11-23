@@ -16,7 +16,7 @@ Phone photos → AI-drafted olx.bg listing → review → submit. Single-owner a
 
 OLX has no sandbox. A `POST /adverts` with a connected token publishes a real advert.
 - Automated tests mock OLX by monkeypatching `Olx` methods. Tests and code paths stay offline.
-- Real posts happen only on the **`ico-test`** user, and only when the user asks for one. Each test advert is then deactivated and deleted.
+- Real posts happen only on the **`ico-test`** user, and only when the user asks for one. Each test advert is then cleaned up: deactivate if `active` (it's rejected otherwise), then delete. Every post, even a deleted one, uses up that category's free quota (the advert turns `limited`), so vary the category.
 - Refresh tokens **rotate**: each refresh invalidates the previous one. Every token file has exactly one owner, so copying one and using both copies kills the older copy.
 
 ## Public repo

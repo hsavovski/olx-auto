@@ -1,6 +1,6 @@
 # olx-auto — Project Spec
 
-Status: agreed (design session 2026-11-23). This document is the source of truth for the v1 scope; GitHub issues are derived from it.
+Status: agreed (design session 2026-11-23), updated with the OLX API spike results the same day ([spike-notes.md](spike-notes.md)). This document is the source of truth for the v1 scope; GitHub issues are derived from it. Progress is tracked in §12.
 
 ## 1. Goal
 
@@ -26,12 +26,12 @@ Secondary goal: learn how to build AI tools. The agent is deliberately hand-writ
 ### OLX accounts
 
 - One OLX *application* (`client_id`/`client_secret`, global). Any OLX account can be connected to it via the `authorization_code` flow, and each gets its own token.
-- **Development uses a separate test OLX account**. This protects the real account's free-ad quotas and seller profile. Fallback if a second account can't connect to the app: the real account, with every test post immediately deactivated and deleted.
-- **Settings → Connect OLX**: in-browser OAuth flow redirecting back to the app's tailnet URL (which must be registered in the OLX app settings). A banner is shown when the token is dead. The refresh token lasts about a month and rotates on use. `login.py` remains as a CLI fallback.
+- **Development uses a separate test OLX account** (app user `ico-test`; verified: it connects to the same OLX app). This protects the real account's free-ad quotas and seller profile. Test posts still use up the test account's per-category free quota, even when they're deleted before going live, so spread them across categories.
+- **Settings → Connect OLX**: in-browser OAuth flow redirecting back to the app's tailnet URL (which must be registered in the OLX app settings). A banner is shown when the token is dead. The refresh token lasts about a month and rotates on use. `olx-auto login <user>` is the CLI fallback.
 
 ## 4. User flow
 
-1. **Home**: big **New listing** button; list of this user's listings with status (`draft` / `submitting` / `posted` + OLX link / `failed` + error), cost per listing, and a total cost.
+1. **Home**: big **New listing** button; list of this user's listings with status (`draft` / `submitting` / `posted` + OLX link + OLX state / `failed` + error), cost per listing, and a total cost.
 2. **New listing**: pick photos (camera *or* gallery), optional short note (any language) → upload.
 3. **Draft is generated in the background** (≈20–60 s). The page shows live progress ("Reading photos… Choosing category… Checking comparables…"). State is on disk, so the phone can be closed and the user can come back later.
 4. **Listing card** shows a best-guess draft immediately, rendered as it will look:
@@ -42,8 +42,9 @@ Secondary goal: learn how to build AI tools. The agent is deliberately hand-writ
    - fields edited by hand are **locked** (lock icon, tap to unlock), and the agent treats them as fixed;
    - **cost** of this listing so far (vision + agent, including all refinements);
    - optional collapsible **trace panel** ("how the agent got here"), shown when `SHOW_TRACE=true`.
-5. **Submit**, enabled only when validation passes (§8) → images uploaded to S3 → advert created on OLX → status `posted` with link. The card *is* the approval step: there is no staging on OLX.
-6. On OLX rejection → status `failed`, error shown and mapped to the relevant field when possible; the user fixes it and **resubmits**.
+5. **Submit**, enabled only when validation passes (§8) → images uploaded to S3 → advert created on OLX → S3 objects deleted → status `posted` with link. The card *is* the approval step: there is no staging on OLX.
+   - A created advert isn't live yet. Its OLX status is shown next to `posted` and refreshed from the API: `disabled`/`new` → **pending moderation**; `limited` → **needs payment** (the category's free quota is used up; the user pays in the OLX app); `active` → **live**; `moderated`/`blocked` → **rejected by OLX**.
+6. On OLX rejection → status `failed`, error shown and mapped to the relevant field when possible; the user fixes it and **resubmits**. OLX returns `{field, title (BG), detail}` per error. Field paths are `title`, `description`, `category_id`, `contact.*`, `location.*`, `params.price[0]` (price) and `params.<attribute code>`.
 
 ## 5. AI architecture
 
@@ -91,23 +92,24 @@ Rules:
 
 Show **both** an AI estimate (from observations and general knowledge) and **OLX comparables** side by side, plus a suggested price. The partner API cannot search other users' adverts, so comparables come from **scraping the public olx.bg search** (first N results: title, price, URL). It lives in an isolated module because it is fragile. Both numbers are recorded in traces, and the comparables module is removed if the AI estimate proves good enough.
 
-Currency: **EUR** (Bulgaria adopted the euro on 2026-01-01; to be confirmed against `/currencies`).
+Currency: **EUR** (Bulgaria adopted the euro on 2026-01-01; confirmed: `/currencies` has EUR as the default, BGN is still accepted).
 
 ## 8. Validation (before Submit is enabled)
 
-Code-level checks, mirrored in the agent's instructions:
-- category is a leaf; all required attributes filled with allowed values;
-- title/description length within OLX limits (spec says ~16–150 / 80–9000; confirm in spike);
+Code-level checks, mirrored in the agent's instructions. OLX validates in stages (category-specific rules are only reported once contact, location etc. pass) and doesn't check title length at all, so these checks must be complete on our side:
+- category is a leaf with `photos_limit > 0` (this excludes `Работа` jobs); all required attributes filled with allowed **codes** (the attribute name for condition varies by category, e.g. `state` vs `condition`);
+- title 16–150 characters (our own rule: the API accepted both 1 and 303 characters); description 40–9000 characters (enforced by OLX);
 - OLX content rules: no phone numbers, emails or URLs in text; ≤50% capitals; no punctuation repeated 3+ times;
 - photo count ≤ category `photos_limit`; at least one photo;
-- price set; location (`city_id`, `district_id` if the city has districts); contact name/phone.
+- price set (OLX requires it); location (`city_id`, `district_id` if the city has districts); contact name (phone is optional for OLX).
 
 ## 9. Photos & images
 
 - Upload accepts JPEG/PNG/**HEIC** (converted to JPEG). On upload: **strip EXIF (GPS!)**, auto-rotate, resize to ~2000 px long edge, compress.
 - Before submit: photos live on local disk in the listing folder. Models receive them as base64; no S3 is involved.
-- At submit: upload to a **private S3 bucket** and pass **presigned GET URLs** (7-day expiry) in the OLX `images[].url` field. The bucket has a lifecycle rule deleting objects after 30 days. The IAM user has access to this bucket only.
-- Open question for the spike: does OLX copy images to its CDN? If yes, retention can be shortened. If no, images must stay reachable permanently.
+- At submit: upload to a **private S3 bucket** (`eu-central-1`) and pass **presigned GET URLs** (1-hour expiry) in the OLX `images[].url` field. Presign with SigV4 against the regional endpoint; the boto3 default produces URLs that S3 rejects for this region.
+- **OLX copies the images to its own CDN synchronously during the create call** (verified in the spike: the response already has `apollo.olxcdn.com` URLs, and they keep working after the S3 objects are deleted). So the S3 objects are **deleted right after a successful create**, and the OLX image URLs are stored in `listing.json`.
+- The bucket's 30-day lifecycle rule is only a safety net for failed submits. The IAM user has access to this bucket only. Both are created by `infra/s3-setup.sh`.
 
 ## 10. Storage
 
@@ -132,7 +134,7 @@ Global config in `.env`: OLX `client_id`/`client_secret`, OpenRouter key, `VISIO
 - Python 3.13+, `uv`, FastAPI, server-rendered templates + HTMX (mobile-first, no SPA/build step), SSE or polling for progress.
 - Existing `olx.py` (stdlib OLX client) moves into the package and gains per-user token storage.
 - `openai` SDK → OpenRouter; `boto3` → S3; Pillow + pillow-heif for images.
-- Testing: `pytest`, **OLX and LLM APIs mocked** in automated tests (recorded responses). Real posting happens only manually, on the test account, followed by deactivate → delete (dev command).
+- Testing: `pytest`, **OLX and LLM APIs mocked** in automated tests (recorded responses). Real posting happens only manually, on the test account, followed by cleanup (dev command): deactivate if `active`, then delete. `deactivate` is rejected for adverts that aren't active, and `delete` works on them directly.
 - CI: GitHub Actions running tests, `ruff`, and **gitleaks** secret scanning.
 - Public GitHub repo. Secrets and all of `data/` are gitignored.
 
@@ -140,8 +142,23 @@ Global config in `.env`: OLX `client_id`/`client_secret`, OpenRouter key, `VISIO
 
 The spike comes first, because its answers can change the design. After the skeleton (storage layout) exists, vision, comparables and UI work can proceed in parallel.
 
+Progress (2026-11-23): **steps 1 and 2 are done**; step 3 is next.
+
+| Step | Status | Where |
+|---|---|---|
+| 1. Spike | ✅ done | `docs/spike-notes.md`, `spikes/`, `infra/s3-setup.sh` |
+| 2. Skeleton | ✅ done | `src/olx_auto/`, `docs/ARCHITECTURE.md` |
+| 3. Vision stage | not started | |
+| 4. Agent loop + tools | not started | |
+| 5. Listing card UI | not started | |
+| 6. Validation + submit | not started (S3 bucket and IAM user exist) | |
+| 7. Comparables scraper | not started | |
+| 8. Polish | not started | |
+
 1. **Spike: OLX API.** Connect a second (test) OLX account to the existing app; post one real advert with S3 images; check the initial status, currency format, title/description limits, and which categories are open to the API on .bg; delete the S3 objects and check whether the images survive; deactivate → delete.
+   *Done:* test account connected; real posts made (no images, then S3 images); EUR confirmed; validation rules and error format mapped; status lifecycle and the free-quota `limited` state found; OLX copies images to its CDN, so S3 retention is minimal; S3 bucket + bucket-only IAM user created and permission-tested. Still open, but not blocking: moderation time to `active`, the exact free quota per category.
 2. **Skeleton.** Repo layout, users + login, CLI `add-user`, per-user storage, photo upload/processing, Connect OLX page.
+   *Done:* FastAPI app with login (scrypt, signed session cookie), per-user folders and scoping, CLI (`serve`, `add-user`, `set-password`, `login`, `check`), photo upload (HEIC, EXIF/GPS stripped, resized), listing folders, in-browser Connect OLX + paste-code fallback, CI (ruff, pytest, gitleaks). 30 tests pass. Users `ico` and `ico-test` exist, both connected to OLX.
 3. **Vision stage.**
 4. **Agent loop + tools**, traces, cost tracking, guardrails.
 5. **Listing card UI**: progress, editing, locks, questions, refinement, trace panel.
