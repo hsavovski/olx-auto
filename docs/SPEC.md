@@ -18,7 +18,7 @@ Secondary goal: learn how to build AI tools. The agent is deliberately hand-writ
 
 ## 3. Users & access
 
-- **Small, fixed set of app users**, one per OLX account (e.g. `ivo` and `ivo-test`). Created via CLI (`uv run olx-auto add-user`); no signup page.
+- **Small, fixed set of app users**, one per OLX account (e.g. `ico` and `ico-test`). Created via CLI (`uv run olx-auto add-user`); no signup page.
 - Each user has their own password, profile, style guide, OLX connection, listings and cost totals.
 - Login page with password → long-lived session cookie. All requests are scoped to the logged-in user's folder.
 - Hosting: runs on the Mac, exposed on the tailnet with `tailscale serve` (HTTPS). The login exists in case it is ever exposed more widely.
