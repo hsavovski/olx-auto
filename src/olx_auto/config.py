@@ -6,6 +6,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# OpenRouter model ids (spec §5); override with VISION_MODEL / AGENT_MODEL to compare models
+DEFAULT_VISION_MODEL = "google/gemini-3.5-flash-lite"
+DEFAULT_AGENT_MODEL = "anthropic/claude-sonnet-5.5"
+
 
 def load_env(path: Path) -> dict[str, str]:
     env = {}
@@ -25,6 +29,12 @@ class Settings:
     olx_client_id: str
     olx_client_secret: str
     olx_redirect_uri: str | None = None
+    openrouter_api_key: str = ""
+    vision_model: str = DEFAULT_VISION_MODEL
+    agent_model: str = DEFAULT_AGENT_MODEL
+    agent_max_iterations: int = 15
+    agent_max_cost: float = 0.50  # USD per agent run
+    show_trace: bool = False
 
     @classmethod
     def load(cls, env_file: Path = ROOT / ".env") -> "Settings":
@@ -36,6 +46,12 @@ class Settings:
             olx_client_id=env.get("client_id", ""),
             olx_client_secret=env.get("client_secret", ""),
             olx_redirect_uri=env.get("redirect_uri") or None,
+            openrouter_api_key=env.get("OPENROUTER_API_KEY", ""),
+            vision_model=env.get("VISION_MODEL") or DEFAULT_VISION_MODEL,
+            agent_model=env.get("AGENT_MODEL") or DEFAULT_AGENT_MODEL,
+            agent_max_iterations=int(env.get("AGENT_MAX_ITERATIONS") or 15),
+            agent_max_cost=float(env.get("AGENT_MAX_COST") or 0.50),
+            show_trace=env.get("SHOW_TRACE", "").lower() in ("1", "true", "yes"),
         )
 
 

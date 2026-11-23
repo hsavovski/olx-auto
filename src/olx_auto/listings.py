@@ -60,9 +60,13 @@ def create(user: User, note: str, raw_photos: list[bytes]) -> dict:
         "status": "draft",
         "note": note.strip(),
         "photos": names,
+        "observations": None,
         "draft": {},
         "locked": [],
         "questions": [],
+        "problems": [],
+        "progress": None,
+        "ai_error": None,
         "cost": {"vision": 0.0, "agent": 0.0},
         "olx": None,
         "error": None,
@@ -95,6 +99,10 @@ def photo_path(user: User, listing_id: str, name: str) -> Path:
     if not path.exists():
         raise KeyError(name)
     return path
+
+
+def trace_path(user: User, listing_id: str) -> Path:
+    return _dir(user, listing_id) / "trace.json"
 
 
 def total_cost(listing: dict) -> float:

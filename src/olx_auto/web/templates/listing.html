@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Listing · olx-auto{% endblock %}
+{% block head %}{% if listing.progress %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
 {% block content %}
 <div class="row"><h1>{{ listing.draft.title or "Draft" }}</h1><span class="pill">{{ listing.status }}</span></div>
 <div class="card">
@@ -11,7 +12,22 @@
   {% if listing.note %}<p>{{ listing.note }}</p>{% endif %}
 </div>
 <div class="card">
+  {% if listing.progress %}
+  <p>{{ listing.progress }}</p>
+  {% elif listing.ai_error %}
+  <p class="error">Drafting failed: {{ listing.ai_error }}</p>
+  {% elif listing.draft %}
+  <p style="white-space: pre-line">{{ listing.draft.description }}</p>
+  <p><strong>€{{ listing.draft.price }}</strong>{% if listing.draft.negotiable %} (negotiable){% endif %}
+    {% if listing.draft.price_reasoning %}<br><span class="muted">{{ listing.draft.price_reasoning }}</span>{% endif %}</p>
+  {% for q in listing.questions if not q.answer %}
+  {% if loop.first %}<p class="muted">Questions:</p><ul>{% endif %}
+  <li>{{ q.question }}</li>
+  {% if loop.last %}</ul>{% endif %}
+  {% endfor %}
+  {% else %}
   <p class="muted">The agent hasn't drafted this listing yet.</p>
+  {% endif %}
   <div class="muted">Cost {{ cost | usd }}</div>
 </div>
 {% endblock %}
