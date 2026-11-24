@@ -1,6 +1,6 @@
 # How olx-auto works
 
-A plain-language tour of the app with diagrams, for reading before the code. You take a few photos of something you want to sell. Two AI models look at them, pick an OLX category, write a Bulgarian title and description, and suggest a price in EUR. You check the result on the listing card, fix what's wrong, and press Submit to post it on olx.bg.
+A plain-language tour of the app with diagrams, for reading before the code. You take a few photos of something you want to sell. AI models look at them, look the product up on the web, pick an OLX category, write a Bulgarian title and description, and suggest a price in EUR. You check the result on the listing card, fix what's wrong, and press Submit to post it on olx.bg.
 
 For the exact details, see [ARCHITECTURE.md](ARCHITECTURE.md) (code, data, flows) and [SPEC.md](SPEC.md) (scope, decisions, progress in §12).
 
@@ -15,8 +15,8 @@ flowchart LR
   research --> agent["Stage 2: Agent AI<br/>category, text, price"]
   agent --> card["Listing card<br/>you review and edit"]
   card -->|"answers, extra info"| agent
-  card -->|"your text edits"| style["Style learning<br/>updates your style guide"]
-  style -. "used next time" .-> agent
+  card -->|"your text edits"| learning["Style learning<br/>updates your style guide"]
+  learning -. "used next time" .-> agent
   card -->|Submit| submit["Submit<br/>photos via S3, post to olx.bg"]
 ```
 
@@ -72,7 +72,7 @@ flowchart TB
     agent["agent.py"]
     vision["vision.py"]
     research["research.py"]
-    style["style.py"]
+    stylepy["style.py"]
     llm["llm.py"]
   end
   subgraph rules["Rules"]
@@ -100,17 +100,17 @@ flowchart TB
   end
 
   cli --> app
-  app --> drafting & submitting & listings & profiles & style & users & validation
+  app --> drafting & submitting & listings & profiles & stylepy & users & validation
   cli --> drafting & submitting & listings & users
   submitting --> adverts & validation & listings & profiles & s3 & olx
-  drafting --> agent & vision & research & style & listings & profiles
+  drafting --> agent & vision & research & stylepy & listings & profiles
   agent --> vision & validation & llm
   drafting --> comparables
   comparables --> olxweb
   vision --> llm
   research --> llm
-  style --> llm
-  style --> users
+  stylepy --> llm
+  stylepy --> users
   listings --> photos & users
   profiles --> users
   users --> olx & config
@@ -274,7 +274,7 @@ Everything lives under `data/`, which is never committed to git.
 ```
 data/
   .session_secret                 signs login cookies (made on first run)
-  users/ico-test/                 one folder per app user (only you can read it)
+  users/maria/                    one folder per app user (only you can read it)
     user.json                     display name + password hash
     profile.json                  contact, city/district, private/business, courier
     style_guide.md                how your listings should read (Bulgarian)
@@ -319,7 +319,8 @@ The important fields in `listing.json`:
 | OpenRouter | One account that reaches many AI models. Defaults are in `config.py` (`VISION_MODEL`, `RESEARCH_MODEL`, `AGENT_MODEL`). Research uses its web search plugin. | `llm.py` |
 | OLX partner API | Categories, attributes, locations, the connected account, and creating adverts. No sandbox: a real POST publishes a real ad. | `olx.py` |
 | AWS S3 | Temporary home for photos during Submit. OLX copies them, then they're deleted. | `s3.py`, `infra/s3-setup.sh` |
-| Tailscale Funnel | Puts the app on the Mac on the public internet over HTTPS at its `ts.net` address. The login (with a lockout after 10 wrong passwords) is what keeps strangers out. | outside the code |
+| Docker (optional) | Runs the app in a container that restarts by itself (`compose.yaml`). Your data stays in the repo's `data/` folder. | outside the code |
+| Tailscale (optional) | Reaches the app from your phone over HTTPS at the computer's `ts.net` address: only your own devices with `tailscale serve`, anyone with `tailscale funnel`. With Funnel, the login (with a lockout after 10 wrong passwords) is what keeps strangers out. | outside the code |
 
 | Package | Why it's here |
 |---|---|
@@ -336,7 +337,7 @@ The important fields in `listing.json`:
 ## 10. Safety rules built into the code
 
 - **Users can't see each other.** Every page gets the logged-in `User` and reaches files only through it. Any id from a URL must match a strict pattern (`NAME_RE`, `ID_RE`, `PHOTO_RE`) or the answer is a 404. That also blocks tricks like `../../`.
-- **Passwords** are stored as scrypt hashes. A wrong password waits 1 second, and an unknown user name takes as long as a known one.
+- **Passwords** are stored as scrypt hashes. A wrong password waits 1 second, and an unknown user name takes as long as a known one. After 10 wrong passwords, that user name is locked for 15 minutes.
 - **No GPS in photos.** Re-saving each photo without metadata removes the location the phone recorded.
 - **The AI never sees contact details.** Name, phone and email are removed from the profile before the agent sees it. Code adds them to the OLX payload at Submit.
 - **Spending limits.** Each agent run stops at `AGENT_MAX_COST` or `AGENT_MAX_ITERATIONS`, keeping the best draft so far.
@@ -358,7 +359,7 @@ The important fields in `listing.json`:
 
 ```sh
 uv run olx-auto serve                           # start the app on http://127.0.0.1:8000
-uv run olx-auto draft ico-test <id> -m "по-евтино"   # rerun the AI on a listing
+uv run olx-auto draft maria <id> -m "по-евтино"       # rerun the AI on a listing
 uv run ruff check . && uv run pytest -q          # the "done" check from CLAUDE.md
 ```
 
@@ -366,7 +367,7 @@ uv run ruff check . && uv run pytest -q          # the "done" check from CLAUDE.
 
 - **Token lock is per process.** The CLI and the web server renewing the OLX token at the same instant could still collide.
 - **An expired OLX connection isn't flagged up front.** The home page only warns when no account was ever connected. If the token has died (about a month unused), Submit fails with an error and the OLX page says the connection is broken. Reconnect there.
-- **The app is on the public internet** (Tailscale Funnel). Only the passwords protect it, with a 15-minute lockout after 10 wrong ones per user name.
+- **On the public internet, only the passwords protect it.** If you expose the app (e.g. with Tailscale Funnel), the login is the only gate, with a 15-minute lockout after 10 wrong passwords per user name. There's no second factor.
 - **Deleting a photo doesn't redo vision.** Observations may still mention a deleted photo by number.
 - **Web facts can be wrong.** The research model may pick the wrong variant or a bad source. It reports a confidence, the agent shouldn't state low-confidence specs, and the card shows the facts with their sources so you can check them.
 - **Comparables can break without warning.** They come from olx.bg's web page, not an API. If OLX changes the page or blocks the requests, the comparing run carries on without them and the trace shows the error.

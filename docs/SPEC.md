@@ -21,7 +21,7 @@ Secondary goal: learn how to build AI tools. The agent is deliberately hand-writ
 - **Small, fixed set of app users**, one per OLX account (e.g. `ico` and `ico-test`). Created via CLI (`uv run olx-auto add-user`); no signup page.
 - Each user has their own password, profile, style guide, OLX connection, listings and cost totals.
 - Login page with password → long-lived session cookie. Changing the password ends every other session. All requests are scoped to the logged-in user's folder.
-- Hosting: runs on the Mac, exposed on the public internet with `tailscale funnel` (HTTPS, same `ts.net` URL as on the tailnet), so users don't need Tailscale. The login is the only protection: a user name is locked for 15 minutes after 10 wrong passwords.
+- Hosting: runs on the Mac in Docker (`compose.yaml`, `restart: unless-stopped`, so it comes back with Docker Desktop at login; `data/` and `.env` are mounted from the repo folder), exposed on the public internet with `tailscale funnel` (HTTPS, same `ts.net` URL as on the tailnet), so users don't need Tailscale. The login is the only protection: a user name is locked for 15 minutes after 10 wrong passwords.
 
 ### OLX accounts
 
@@ -174,7 +174,7 @@ Progress (2026-11-24): **v1 is done** (steps 1–7). The real account `ico` has 
 | 5. Listing card UI | ✅ done, plus style learning (§5) | `web/templates/listing.html`, `style.py`, Style page |
 | 6. Validation + submit | ✅ done: first real post on `ico-test` went `active` in under 12 min | `validation.py`, `adverts.py`, `s3.py`, `submitting.py` |
 | 7. Comparables scraper | built and tested offline; checked by hand against live olx.bg | `comparables.py`, agent tool, "Compare prices on OLX" button |
-| 8. Polish | started: Funnel hosting with login lockout, `SEARCH_ENGINE` setting. To do: autostart, model comparison, dead-connection banner | |
+| 8. Polish | started: Funnel hosting with login lockout, `SEARCH_ENGINE` setting, Docker deployment (also the autostart). To do: model comparison, dead-connection banner | |
 
 1. **Spike: OLX API.** Connect a second (test) OLX account to the existing app; post one real advert with S3 images; check the initial status, currency format, title/description limits, and which categories are open to the API on .bg; delete the S3 objects and check whether the images survive; deactivate → delete.
    *Done:* test account connected; real posts made (no images, then S3 images); EUR confirmed; validation rules and error format mapped; status lifecycle and the free-quota `limited` state found; OLX copies images to its CDN, so S3 retention is minimal; S3 bucket + bucket-only IAM user created and permission-tested. Moderation took under 12 minutes on the first real post. Still open, but not blocking: what a rejection looks like, the exact free quota per category.
@@ -185,7 +185,7 @@ Progress (2026-11-24): **v1 is done** (steps 1–7). The real account `ico` has 
 5. **Listing card UI**: progress, editing, locks, questions, refinement, trace panel.
 6. **Validation + submit** (S3 upload, OLX create, failed/resubmit).
 7. **Comparables scraper.**
-8. **Polish**: launchd autostart, model comparison (cost and hand-edit rate per model pair), a reconnect banner when the OLX token is dead.
+8. **Polish**: autostart (done with Docker's restart policy instead of launchd), model comparison (cost and hand-edit rate per model pair), a reconnect banner when the OLX token is dead.
    *Done:* public hosting via Tailscale Funnel with a login lockout; `SEARCH_ENGINE` for research; the OLX redirect URI points at the app's `ts.net` callback.
 
 ## 13. Future

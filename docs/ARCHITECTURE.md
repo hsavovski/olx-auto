@@ -199,6 +199,12 @@ Read by `Settings.load()` from `.env` at the repo root, with environment variabl
 | `SHOW_TRACE` | Show the trace panel on the card |
 | `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Photo bucket for submit (`infra/s3-setup.sh`); submit fails with a clear error without them |
 
+## Deployment
+
+`Dockerfile` builds the app on `python:3.15-slim` with uv: dependencies from `uv.lock`, the project installed editable in `/app`, so `config.ROOT` is `/app` and `.env`, `data/` and `context/` are found there. It runs as a non-root user and starts `olx-auto serve --host 0.0.0.0`. `.dockerignore` keeps `.env`, `data/`, token files and `spikes/` out of the image.
+
+`compose.yaml` runs it with `restart: unless-stopped`, publishes `127.0.0.1:8000` (this machine only; Tailscale serve/funnel proxies to it) and mounts `./data` and `./.env` (read-only). Data stays in the repo folder, so `uv run olx-auto …` and the container see the same users. Only one process may use the OLX token files at a time (refresh tokens rotate), so CLI commands that touch OLX run inside the container: `docker compose exec app olx-auto …`.
+
 Tests construct `Settings(...)` directly with a `tmp_path` data dir and never read `.env`.
 
 ## Testing & CI
@@ -233,4 +239,4 @@ Tests construct `Settings(...)` directly with a `tmp_path` data dir and never re
 
 ## Not built yet
 
-Autostart, model comparison, a banner for a dead OLX token. See spec §12 step 8.
+Model comparison, a banner for a dead OLX token. See spec §12 step 8.

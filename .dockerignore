@@ -1,0 +1,17 @@
+# secrets and real data never go into the image; compose.yaml mounts them
+.env
+*token*.json
+data/
+spikes/
+
+.git/
+.github/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+tests/
+docs/
+infra/

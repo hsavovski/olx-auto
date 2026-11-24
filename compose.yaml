@@ -1,0 +1,11 @@
+# docker compose up -d --build   (README: "Run it with Docker")
+services:
+  app:
+    build: .
+    image: olx-auto
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"  # this machine only; Tailscale serve/funnel proxies to it
+    volumes:
+      - ./data:/app/data       # users, tokens, listings: the same folder `uv run` uses
+      - ./.env:/app/.env:ro
