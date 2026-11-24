@@ -78,6 +78,13 @@ Ran `spikes/olx_image_spike.py`: two JPEGs uploaded to S3, posted with 7-day pre
 - All 4 images came through; `courier: true`, the district and `advertiser_type` were kept. OLX added the district's `latitude`/`longitude` to `location`. Contact holds `name` and `phone` (no email).
 - **Cleanup of an `active` advert:** `deactivate` is accepted, but a `DELETE` sent right after is refused with 400 "Невалидно състояние". Deactivation finishes a moment later (status `removed_by_user`); then `DELETE` works and `GET` returns 404. `submitting.remove` waits for the status to leave `active` first.
 
+### Public search (comparables, 2026-11-23)
+- `https://www.olx.bg/api/v1/offers/` (the site's JSON API) answers **403 from CloudFront** to plain HTTP clients, and robots.txt disallows `/api/` anyway.
+- The normal search page works (200, ~2 MB) and embeds everything as JSON in `window.__PRERENDERED_STATE__` (a JSON string to decode twice): `listing.listing.{totalElements, ads[]}` and `categories.list` (all 1243 categories with their URL `path`).
+- Each ad has `title`, `url`, `price.regularPrice{value, currencyCode, negotiable}` (all EUR in the samples), `params[]` with `normalizedValue` codes (`state: used`), `isPromoted`, `isBusiness`, `createdTime`, `location`, and the seller's `user` details (not kept).
+- **URL shape:** `/<category path>/q-<words-joined-by-dashes>/`, without a category `/ads/q-.../`. Attribute filters work as `?search[filter_enum_<code>][0]=<value code>`. `?search[category_id]=` gives 404. robots.txt disallows `/*?q=` but allows the path style.
+- A page has about 40 adverts plus promoted ones on top. Text search is loose: "rossignol ски обувки" in winter sports (623) also finds skis and complete sets.
+
 ## Still open (non-blocking)
 
 1. What a moderation rejection looks like (status and any reason). Moderation itself took under 12 minutes on the first real post.

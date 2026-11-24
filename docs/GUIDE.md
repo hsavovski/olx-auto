@@ -48,6 +48,7 @@ Every Python file in `src/olx_auto/` and what it's responsible for. A "module" i
 | | `profiles.py` | `profile.json`: contact name/phone/email, city and district, private or business, courier delivery. Validates the profile form. |
 | | `photos.py` | Cleans each uploaded photo: opens JPEG/PNG/HEIC, turns it upright, shrinks it to 2000 px, saves it as JPEG without metadata (so no GPS location leaks). |
 | Plumbing | `config.py` | Reads `.env` and environment variables into one `Settings` object: API keys, model names, cost limits, the data folder. |
+| | `comparables.py` | Reads the public olx.bg search page (as a browser would) and pulls out the asking prices of similar adverts. Fragile by nature, so it's kept apart; if OLX changes the page, the agent just prices without it. |
 | | `s3.py` | The private S3 bucket: upload a photo and get a short-lived link OLX can download it from, then delete it. |
 | | `olx.py` | The OLX API client, standard library only. Handles tokens (and their automatic renewal) and has a method for each OLX endpoint. |
 
@@ -85,11 +86,13 @@ flowchart TB
     config["config.py"]
     olx["olx.py"]
     s3["s3.py"]
+    comparables["comparables.py"]
   end
   subgraph outside["Outside world"]
     openrouter(["OpenRouter AI"])
     olxapi(["OLX partner API"])
     aws(["AWS S3"])
+    olxweb(["olx.bg search page"])
     pillow(["Pillow image library"])
   end
 
@@ -99,6 +102,8 @@ flowchart TB
   submitting --> adverts & validation & listings & profiles & s3 & olx
   drafting --> agent & vision & style & listings & profiles
   agent --> vision & validation & llm
+  drafting --> comparables
+  comparables --> olxweb
   vision --> llm
   style --> llm
   style --> users
@@ -187,6 +192,7 @@ flowchart TD
 | `look_at_photos` | Asks the vision model a specific question, e.g. "Is the screen cracked?" | OpenRouter |
 | `suggest_category` | Gets OLX category suggestions for a short search like "детска количка". | OLX API |
 | `get_category_attributes` | Lists the fields a category needs (condition, size…) and their allowed values. Refuses non-leaf categories and ones OLX won't take from the API. | OLX API |
+| `search_olx_comparables` | Looks up what similar items are listed at on olx.bg right now: titles, prices, the median. Offered only in a run started with **Compare prices on OLX**; at most 3 searches. | olx.bg search page |
 | `ask_user` | Adds questions to the card. Doesn't wait for answers. | nothing |
 | `submit_draft` | Hands in the listing and runs `validation.check_draft`. Problems go back to the model so it can fix them. | `validation.py` |
 
@@ -194,7 +200,7 @@ flowchart TD
 
 ## 6. The listing card
 
-The review page at `/listings/{id}` has four ways to change a draft, and Submit.
+The review page at `/listings/{id}` has five ways to change a draft, and Submit.
 
 ```mermaid
 flowchart LR
@@ -203,6 +209,8 @@ flowchart LR
   card -->|"Tap the lock"| unlock["POST /unlock/field<br/>AI may change it again"]
   card -->|"Delete a photo"| delphoto["POST /photos/name/delete<br/>at least one stays"]
   card -->|"Answer questions or<br/>write extra info"| refine["POST /refine<br/>save answers + message"]
+  card -->|"Compare prices on OLX"| compare["POST /compare"]
+  compare --> rerun
   edit -->|"title, description<br/>or price changed"| learn["Style learning<br/>(background)"]
   refine --> rerun["Agent runs again<br/>(vision is reused)"]
   rerun --> learn
@@ -210,6 +218,7 @@ flowchart LR
   card -->|"Submit (no problems left)"| post["POST /submit<br/>S3 → OLX → posted or failed"]
 ```
 
+- **Prices are compared with OLX only when you ask.** Compare prices on OLX runs the agent with the olx.bg search; other runs don't go online for prices. The last comparison stays on the card and is given to every later run, so the price doesn't drift away from it.
 - **Messages are kept forever.** What you write in the "additional information" box is stored on the listing and given to every later run, so a fact mentioned once isn't lost.
 - **The card is frozen while the AI runs.** Forms are disabled and the POST routes do nothing until the run ends. If the server restarted mid-run, the card unfreezes after 10 minutes.
 - **"To fix before submitting"** is computed on every page load, because the profile can change at any time. The Submit button stays disabled until the list is empty.
@@ -296,6 +305,7 @@ The important fields in `listing.json`:
 
 | Service | Used for | Code |
 |---|---|---|
+| olx.bg search page | Prices of similar adverts (the partner API can't search other people's adverts). | `comparables.py` |
 | OpenRouter | One account that reaches many AI models. Defaults are in `config.py` (`VISION_MODEL`, `AGENT_MODEL`). | `llm.py` |
 | OLX partner API | Categories, attributes, locations, the connected account, and creating adverts. No sandbox: a real POST publishes a real ad. | `olx.py` |
 | AWS S3 | Temporary home for photos during Submit. OLX copies them, then they're deleted. | `s3.py`, `infra/s3-setup.sh` |
@@ -346,3 +356,5 @@ uv run ruff check . && uv run pytest -q          # the "done" check from CLAUDE.
 
 - **Token lock is per process.** The CLI and the web server renewing the OLX token at the same instant could still collide.
 - **Deleting a photo doesn't redo vision.** Observations may still mention a deleted photo by number.
+- **Comparables can break without warning.** They come from olx.bg's web page, not an API. If OLX changes the page or blocks the requests, the comparing run carries on without them and the trace shows the error.
+- **Comparables are asking prices**, not sale prices, and a broad category mixes different items. The agent judges by title; whether that's good enough still needs real runs.

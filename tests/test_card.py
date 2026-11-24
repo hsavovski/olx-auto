@@ -14,7 +14,8 @@ from tests.test_ai import GOOD_DRAFT, STROLLER_ATTRS
 def started(monkeypatch):
     """Background tasks that would call the LLM, recorded instead of run."""
     calls = []
-    monkeypatch.setattr(drafting, "generate", lambda s, u, i: calls.append(("generate", i)))
+    monkeypatch.setattr(drafting, "generate", lambda s, u, i, compare=False:
+                        calls.append(("compare" if compare else "generate", i)))
     monkeypatch.setattr(drafting, "try_learn_style", lambda s, u, i: calls.append(("learn", i)))
     return calls
 
@@ -125,7 +126,7 @@ def test_running_listing_cannot_be_changed(client, user, drafted, started):
 def test_other_users_listing_is_404(client, settings, started):
     other = users.create_user(settings.data_dir, "other", PASSWORD)
     theirs = listings.create(other, "", [jpeg_bytes(), jpeg_bytes()])
-    for path in ("edit", "refine", "unlock/title", "photos/01.jpg/delete"):
+    for path in ("edit", "refine", "compare", "unlock/title", "photos/01.jpg/delete"):
         assert client.post(f"/listings/{theirs['id']}/{path}", data={"message": "x"}).status_code == 404
     listing = listings.load(other, theirs["id"])
     assert listing["messages"] == [] and listing["photos"] == ["01.jpg", "02.jpg"]

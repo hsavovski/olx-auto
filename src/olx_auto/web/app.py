@@ -108,10 +108,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             _start(background, drafting.generate, user, listing["id"])
         return redirect(f"/listings/{listing['id']}")
 
-    def _start(background: BackgroundTasks, task, user: users.User, listing_id: str) -> None:
+    def _start(background: BackgroundTasks, task, user: users.User, listing_id: str, **kwargs) -> None:
         """Mark the run as started now, so the page the user lands on already shows progress."""
         drafting.mark_started(user, listing_id)
-        background.add_task(task, settings, user, listing_id)
+        background.add_task(task, settings, user, listing_id, **kwargs)
 
     def _editable(request: Request, user: users.User, listing_id: str):
         """The listing, or a response: 404 for a foreign/unknown id, back to the card while a run is
@@ -228,6 +228,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         listings.save(user, listing)
         if settings.openrouter_api_key:
             _start(background, drafting.generate, user, listing_id)
+        return redirect(f"/listings/{listing_id}")
+
+    @app.post("/listings/{listing_id}/compare")
+    def compare_prices(request: Request, user: CurrentUser, listing_id: str, background: BackgroundTasks):
+        listing, response = _editable(request, user, listing_id)
+        if response:
+            return response
+        if settings.openrouter_api_key and listing["draft"]:
+            _start(background, drafting.generate, user, listing_id, compare=True)
         return redirect(f"/listings/{listing_id}")
 
     # ---- profile ----------------------------------------------------------

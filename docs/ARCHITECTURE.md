@@ -17,12 +17,13 @@ src/olx_auto/
   agent.py       Stage 2: hand-written tool loop → draft, questions; guardrails, locks
   validation.py  Draft checks (spec §8): content rules, lengths, attributes; submit readiness
   adverts.py     Listing + profile → OLX `POST /adverts` payload
+  comparables.py OLX comparables: public olx.bg search page → asking prices, median (stdlib only)
   s3.py          PhotoStore: put a photo + presigned GET URL, delete (boto3, SigV4, regional endpoint)
   submitting.py  Submit: S3 → create advert → S3 cleanup → posted/failed; OLX status refresh; remove
   drafting.py    Listing-level orchestration: vision once, agent run, style learning, progress/cost/trace
   style.py       Style guide: read/write with backups + change log, revert, the learner LLM call
   cli.py         `olx-auto` command (serve, add-user, set-password, login, check, draft, remove-advert)
-  web/app.py     FastAPI app factory: auth, listings + card (edit/lock/refine), profile, style guide, Connect OLX
+  web/app.py     FastAPI app factory: auth, listings + card (edit/lock/refine/compare), profile, style guide, Connect OLX
   web/templates/ Jinja templates, mobile-first, one inline stylesheet in base.html
 context/         *.example files copied into each new user's folder
 spikes/          One-off API exploration scripts (output in spikes/out/, gitignored)
@@ -36,6 +37,7 @@ Everything at runtime lives under `DATA_DIR` (default `./data`, gitignored). The
 ```
 data/
   .session_secret            generated on first run when SESSION_SECRET is unset
+  olx_category_paths.json    {category id: olx.bg URL path}, refreshed by every search page
   users/<name>/              chmod 700
     user.json                {display_name, password: "scrypt$<salt>$<hash>"}
     profile.json             {advertiser_type, contact: {name, phone, email},
@@ -67,6 +69,10 @@ data/
  "edits": [{"at", "field", "before", "after"}],  hand edits from the card
  "learned": {"messages": n, "edits": n},          feedback already used by style learning
  "problems": [],                      check_draft output for the current draft
+ "comparables": null | {"query", "category_id", "filters", "url", "total",
+                 "summary": {"n", "median", "low", "high", "min", "max"},
+                 "items": [{"title", "price", "negotiable", "condition", "url", "promoted",
+                            "business", "city", "created"}], "at"},  last search of the last Compare run
  "progress": null | "Choosing category…",  set while a run is going
  "ai_error": null | "...", "agent_stopped": "submitted|max_iterations|max_cost",
  "cost": {"vision": 0.0, "agent": 0.0, "style": 0.0},
@@ -104,7 +110,7 @@ The handlers are plain `def` functions, so FastAPI runs them in its threadpool a
 ### Drafting (vision + agent)
 After a successful upload, `POST /listings` adds `drafting.generate` as a FastAPI background task (only when `OPENROUTER_API_KEY` is set). `olx-auto draft <user> <id> [-m "message"] [--fresh]` runs the same thing in the foreground. `generate`:
 1. **Vision** (skipped if `observations` already exist): `vision.observe` sends every photo as a base64 data URL plus the note, with `response_format: json_object`, and stores the observations.
-2. **Agent**: `agent.run_agent` gets the observations, note, profile (without `contact`), style guide, current draft, locked fields, answered questions and all of the listing's messages. Tools: `look_at_photos` (a `vision.ask` call, costed as vision), `suggest_category`, `get_category_attributes` (rejects non-leaf and `photos_limit == 0` categories), `ask_user`, `submit_draft`.
+2. **Agent**: `agent.run_agent` gets the observations, note, profile (without `contact`), style guide, current draft, locked fields, answered questions and all of the listing's messages. Tools: `look_at_photos` (a `vision.ask` call, costed as vision), `suggest_category`, `get_category_attributes` (rejects non-leaf and `photos_limit == 0` categories), `search_olx_comparables` (only when comparing, see below), `ask_user`, `submit_draft`.
 3. `submit_draft` runs `validation.check_draft` against the category's attributes. Problems go back to the model as the tool result; a clean draft ends the run.
 4. Guardrails: at `AGENT_MAX_COST` the run stops; on the last of `AGENT_MAX_ITERATIONS` turns, `tool_choice` forces `submit_draft`. The last submitted draft is kept even if it still has problems; with none, the previous draft stays.
 5. Locked fields are put back by code after the run, whatever the model wrote.
@@ -115,12 +121,22 @@ Each step updates `progress` in `listing.json` (reloading the file before each w
 
 `agent.Catalog` is the category-data interface the tools use. `Olx` satisfies it with the client token; a disk cache of the category tree (spike-notes.md) can replace it.
 
+### Comparables
+`comparables.Search.search(query, category_id, filters)` loads one olx.bg search page (about 40 adverts) the way a browser does and parses the JSON it embeds (`window.__PRERENDERED_STATE__`), not the HTML:
+1. The category id becomes its URL path (`za-bebeto-i-deteto/bebeshki-i-detski-kolichki`), from `olx_category_paths.json`. A missing or week-old cache is filled from `/ads/`; every search page refreshes it too.
+2. URL: `/<path>/q-<words>/?search[filter_enum_<code>][0]=<value>`. Path-style queries are allowed by robots.txt; `/api/` and `?q=` are not.
+3. Each advert keeps title, EUR price (other currencies → none), condition, olx.bg link, promoted/business, city and date. Seller details are dropped.
+4. `summary`: count, median, quartiles ("middle half"), min and max of the prices.
+
+Anything unexpected (HTTP error, no embedded JSON, a different shape) raises `ComparablesError`; the agent gets it as a tool error and prices from its own knowledge. The agent sees titles, prices, condition and dates (no links) and judges which adverts really compare. The tool is offered (and `agent.COMPARE_PROMPT` added) only in a run started by `POST /listings/{id}/compare`, i.e. `drafting.generate(..., compare=True)`; other runs never search. At most 3 searches per run. `drafting` saves the run's last search as `comparables`; a run without one keeps the previous one, and every run gets the saved one (without links) in its context. The card's price section shows its median, middle half, count, a link to the search and the top adverts.
+
 ### Listing card
 `GET /listings/{id}` renders the draft as a form. While `listings.is_running` (progress set and written in the last 10 minutes, so a run killed by a restart doesn't block forever), the page refreshes every 3 s, the forms are disabled, and the POST routes below redirect back without changing anything.
 - **To fix before submitting** is `validation.submit_problems(listing, profile)`, computed on every page view because the profile can change at any time: `check_draft` plus category loaded, photo count (≥ 1, ≤ `photos_limit`), location and contact name. The stored `problems` field stays `check_draft` only (what the agent last saw).
 - `POST /listings/{id}/edit`: title, description, price, negotiable, `attr_<code>` (one select, or checkboxes for multi-value attributes). `listings.edit_draft` compares canonically (so a re-ordered multi-value isn't a change), records each changed field in `edits` and locks it. `problems` is recomputed. If title, description or price changed, `drafting.try_learn_style` runs in the background.
 - `POST /listings/{id}/photos/{name}/delete` (name checked against `PHOTO_RE`) removes the photo from `photos` and from disk, so a listing can be brought under the category's `photos_limit`. The last photo can't be deleted, and the other photos keep their names. Observations that mention a photo by number aren't updated.
 - `POST /listings/{id}/unlock/{field}` removes a lock. The lock buttons sit inside the edit form but submit their own empty forms (`form="unlock-<field>"`), because forms can't be nested.
+- `POST /listings/{id}/compare`: `drafting.generate(..., compare=True)` in the background (needs a draft).
 - `POST /listings/{id}/refine`: `answer_<question id>` and `message` → answers saved, message appended to `messages` → `drafting.generate` in the background.
 - Background work is started through `_start`, which sets `progress` *before* the redirect, so the page the user lands on is already refreshing.
 - The trace panel (`SHOW_TRACE`) shows each run: vision observations, the agent's messages and tool calls (system prompt left out), and style learner results.
@@ -196,7 +212,8 @@ Tests construct `Settings(...)` directly with a `tmp_path` data dir and never re
 
 ## Decisions made while building the AI stages
 
-- **No `search_olx_comparables` tool yet.** It arrives with the scraper (spec §12 step 7). Until then the agent prices from observations and general knowledge (`price_estimate`, `price_reasoning`).
+- **Comparables run on demand.** Each comparison loads olx.bg pages and costs an agent run, so the seller starts it with a button instead of every run searching.
+- **Comparables are a tool, not a fixed step.** The agent picks the query and filters, and judges the results by title; a broad category (e.g. winter sports) mixes skis, boots and full sets, so the raw median alone would mislead. `price_estimate` remains its own judgement, shown next to the OLX median.
 - **The model gets validation problems as tool results** instead of the app fixing drafts, so prompt gaps show up in traces.
 - **Contact details are never sent to the model.** They aren't needed for the text, and the code fills them in.
 
@@ -209,4 +226,4 @@ Tests construct `Settings(...)` directly with a `tmp_path` data dir and never re
 
 ## Not built yet
 
-Comparables, autostart. Order and parallelism are in spec §12.
+Autostart, cost overview, model comparison. Order and parallelism are in spec §12.

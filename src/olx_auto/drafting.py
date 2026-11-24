@@ -9,7 +9,7 @@ import os
 import threading
 from datetime import UTC, datetime
 
-from . import agent, listings, profiles, style, vision
+from . import agent, comparables, listings, profiles, style, vision
 from .agent import Catalog
 from .config import Settings
 from .llm import LLM, LLMError
@@ -57,13 +57,19 @@ def _profile(user: User) -> dict:
 
 
 def generate(settings: Settings, user: User, listing_id: str, *,
-             llm: LLM | None = None, catalog: Catalog | None = None) -> dict:
-    """Draft (or refine) a listing, then learn from any new feedback.
+             llm: LLM | None = None, catalog: Catalog | None = None,
+             compare: bool = False, search: agent.Comparables | None = None) -> dict:
+    """Draft (or refine) a listing, then learn from any new feedback. `compare` (the card's
+    "Compare prices on OLX") lets the agent search olx.bg; other runs don't go online for prices.
     Errors end up in listing["ai_error"], never raised."""
     listing = _update(user, listing_id, progress="Starting…", ai_error=None)
     try:
         llm = llm or LLM(settings.openrouter_api_key)
         catalog = catalog or user.olx(settings)
+        if compare:
+            search = search or comparables.Search(settings.data_dir / "olx_category_paths.json")
+        else:
+            search = None
         photo_paths = [listings.photo_path(user, listing_id, p) for p in listing["photos"]]
 
         observations = listing.get("observations")
@@ -80,9 +86,10 @@ def generate(settings: Settings, user: User, listing_id: str, *,
         inp = agent.AgentInput(
             observations=observations, note=listing["note"], profile=_profile(user),
             style_guide=style.read_guide(user), draft=listing["draft"], locked=listing["locked"],
-            answered=answered, messages=[m["text"] for m in listing["messages"]])
+            answered=answered, messages=[m["text"] for m in listing["messages"]],
+            comparables=listing.get("comparables"))
         result = agent.run_agent(
-            llm, settings.agent_model, inp, catalog=catalog, photo_paths=photo_paths,
+            llm, settings.agent_model, inp, catalog=catalog, comparables=search, photo_paths=photo_paths,
             vision_model=settings.vision_model, max_iterations=settings.agent_max_iterations,
             max_cost=settings.agent_max_cost,
             on_progress=lambda step: _update(user, listing_id, progress=step))
@@ -98,6 +105,8 @@ def generate(settings: Settings, user: User, listing_id: str, *,
             fields.update(draft=result.draft, ai_draft=result.draft)
         if result.category:
             fields["category"] = result.category
+        if result.comparables:  # a run that found nothing keeps the earlier result
+            fields["comparables"] = result.comparables
         _update(user, listing_id, **fields)
     except (LLMError, OlxError, OSError, RuntimeError, KeyError) as e:
         return _update(user, listing_id, progress=None, ai_error=str(e))

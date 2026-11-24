@@ -99,7 +99,7 @@ So the seller doesn't repeat the same feedback on every listing, the style guide
 
 ## 7. Pricing
 
-Show **both** an AI estimate (from observations and general knowledge) and **OLX comparables** side by side, plus a suggested price. The partner API cannot search other users' adverts, so comparables come from **scraping the public olx.bg search** (first N results: title, price, URL). It lives in an isolated module because it is fragile. Both numbers are recorded in traces, and the comparables module is removed if the AI estimate proves good enough.
+Show **both** an AI estimate (from observations and general knowledge) and **OLX comparables** side by side, plus a suggested price. The partner API cannot search other users' adverts, so comparables come from **scraping the public olx.bg search** (first N results: title, price, URL). It lives in an isolated module because it is fragile. Both numbers are recorded in traces, and the comparables module is removed if the AI estimate proves good enough. Comparing is **on demand**: a "Compare prices on OLX" button on the card starts an agent run that may search; other runs price from the observations and the last comparison.
 
 Currency: **EUR** (Bulgaria adopted the euro on 2026-01-01; confirmed: `/currencies` has EUR as the default, BGN is still accepted).
 
@@ -153,7 +153,7 @@ Global config in `.env`: OLX `client_id`/`client_secret`, OpenRouter key, `VISIO
 
 The spike comes first, because its answers can change the design. After the skeleton (storage layout) exists, vision, comparables and UI work can proceed in parallel.
 
-Progress (2026-11-23): **steps 1–6 are done**; step 7 (comparables) is next. One real drafting run on photos (test account) worked end to end.
+Progress (2026-11-23): **steps 1–6 are done**; step 7 (comparables) is built and waits for a real drafting run to judge it. One real drafting run on photos (test account) worked end to end.
 
 | Step | Status | Where |
 |---|---|---|
@@ -163,7 +163,7 @@ Progress (2026-11-23): **steps 1–6 are done**; step 7 (comparables) is next. O
 | 4. Agent loop + tools | ✅ done (no comparables tool until step 7) | `agent.py`, `drafting.py`, `olx-auto draft` |
 | 5. Listing card UI | ✅ done, plus style learning (§5) | `web/templates/listing.html`, `style.py`, Style page |
 | 6. Validation + submit | ✅ done: first real post on `ico-test` went `active` in under 12 min | `validation.py`, `adverts.py`, `s3.py`, `submitting.py` |
-| 7. Comparables scraper | not started | |
+| 7. Comparables scraper | built and tested offline; checked by hand against live olx.bg | `comparables.py`, agent tool, "Compare prices on OLX" button |
 | 8. Polish | not started | |
 
 1. **Spike: OLX API.** Connect a second (test) OLX account to the existing app; post one real advert with S3 images; check the initial status, currency format, title/description limits, and which categories are open to the API on .bg; delete the S3 objects and check whether the images survive; deactivate → delete.

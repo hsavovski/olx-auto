@@ -49,6 +49,7 @@ def _defaults() -> dict:
         "edits": [],  # hand edits: [{at, field, before, after}]
         "learned": {"messages": 0, "edits": 0},  # feedback already used for the style guide
         "problems": [],
+        "comparables": None,  # last OLX comparables search (comparables.Search.search result)
         "progress": None,
         "ai_error": None,
         "cost": {"vision": 0.0, "agent": 0.0, "style": 0.0},

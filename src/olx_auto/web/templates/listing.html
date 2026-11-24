@@ -53,6 +53,7 @@
 <div class="banner error">A submit was cut off. Check your adverts on OLX before submitting again, so it isn't posted twice.</div>
 {% endif %}
 
+<form id="compare" method="post" action="/listings/{{ listing.id }}/compare"></form>
 {% for f in listing.locked %}
 <form id="unlock-{{ f }}" method="post" action="/listings/{{ listing.id }}/unlock/{{ f }}"></form>
 {% endfor %}
@@ -116,6 +117,28 @@
     {% if draft.price_estimate %}AI estimate <strong>€{{ draft.price_estimate.low }}–{{ draft.price_estimate.high }}</strong>. {% endif %}
     {{ draft.price_reasoning or "" }}
   </div>
+  {% endif %}
+  {% set comp = listing.comparables %}
+  {% if comp and comp.summary.n %}
+  <div class="estimate comparables">
+    On OLX now: median <strong>€{{ comp.summary.median }}</strong>, middle half €{{ comp.summary.low }}–{{ comp.summary.high }}
+    ({{ comp.summary.n }} adverts for "{{ comp.query }}", asking prices).
+    <a href="{{ comp.url }}" target="_blank" rel="noopener">See the search</a>
+    <details><summary>Adverts</summary>
+      <ul>{% for i in comp["items"][:15] if i.price %}
+        <li>€{{ i.price }} · {% if i.url %}<a href="{{ i.url }}" target="_blank" rel="noopener">{{ i.title }}</a>{% else %}{{ i.title }}{% endif %}
+          <span class="muted">{{ i.created }}{% if i.promoted %} · promoted{% endif %}</span></li>
+      {% endfor %}</ul>
+    </details>
+  </div>
+  {% elif comp %}
+  <div class="estimate comparables">No adverts on OLX for "{{ comp.query }}". <a href="{{ comp.url }}" target="_blank" rel="noopener">See the search</a></div>
+  {% endif %}
+  {% if ai_enabled %}
+  <div class="actions"><button class="btn secondary" form="compare"
+    title="The agent searches olx.bg for similar adverts and reprices (unless the price is locked)">
+    Compare prices on OLX</button>
+    {% if comp %}<span class="muted">Last compared {{ comp.at[:10] }}</span>{% endif %}</div>
   {% endif %}
 
   <div class="actions"><button class="btn" type="submit">Save changes</button></div>
