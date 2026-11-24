@@ -39,7 +39,7 @@ Every Python file in `src/olx_auto/` and what it's responsible for. A "module" i
 | Conductor | `drafting.py` | Runs one AI pass on a listing: vision (only the first time), research (when there's something new to look up), then the agent, then style learning. Writes progress, costs and the trace to disk as it goes, so you can close your phone and come back. |
 | | `submitting.py` | Posts a listing to OLX: photos to S3, create the advert, delete the S3 copies, save `posted` or `failed` with OLX's reasons. Also refreshes a posted advert's OLX status and removes test adverts. |
 | AI | `vision.py` | Stage 1. Sends the photos to the vision model and gets back "observations": item type, brand, model, text on the item, condition, defects, accessories, open questions. |
-| | `research.py` | Stage 1b. One call to a small model with OpenRouter's web search turned on. It identifies the exact product and returns its facts (specs, features, variants, new price) with the pages it used. |
+| | `research.py` | Stage 1b. One call to a small model with OpenRouter's web search turned on (the search engine is the `SEARCH_ENGINE` setting; the search fee costs more than the model). It identifies the exact product and returns its facts (specs, features, variants, new price) with the pages it used. |
 | | `agent.py` | Stage 2. The hand-written tool loop. Gives the agent model five tools and lets it call them until it submits a draft that passes the checks. Holds the system prompt. |
 | | `style.py` | The Bulgarian style guide: reading, saving with backups, a change log, Undo, and the "learner" AI call that turns your feedback into general rules. |
 | | `llm.py` | The one place that talks to OpenRouter. Returns the model's reply plus token counts and cost in USD. |
@@ -319,7 +319,7 @@ The important fields in `listing.json`:
 | OpenRouter | One account that reaches many AI models. Defaults are in `config.py` (`VISION_MODEL`, `RESEARCH_MODEL`, `AGENT_MODEL`). Research uses its web search plugin. | `llm.py` |
 | OLX partner API | Categories, attributes, locations, the connected account, and creating adverts. No sandbox: a real POST publishes a real ad. | `olx.py` |
 | AWS S3 | Temporary home for photos during Submit. OLX copies them, then they're deleted. | `s3.py`, `infra/s3-setup.sh` |
-| Tailscale | Lets the phone reach the app on the Mac over HTTPS without exposing it to the internet. | outside the code |
+| Tailscale Funnel | Puts the app on the Mac on the public internet over HTTPS at its `ts.net` address. The login (with a lockout after 10 wrong passwords) is what keeps strangers out. | outside the code |
 
 | Package | Why it's here |
 |---|---|

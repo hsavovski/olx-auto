@@ -73,6 +73,8 @@ tailscale serve --bg 8000
 
 The app is now at `https://<your-mac-name>.<your-tailnet>.ts.net` on every device in your tailnet, but not on the public internet. Add it to your phone's home screen. To stop sharing: `tailscale serve reset`.
 
+To reach it from any device without Tailscale, use `tailscale funnel --bg 8000` instead (Funnel must be allowed for the machine in the tailnet policy). The same URL is then public, and the login is all that protects it: use strong passwords. `tailscale funnel reset` takes it off the internet.
+
 To have OLX redirect straight back to the app after Connect OLX, register `https://<your-mac-name>.<your-tailnet>.ts.net/olx/callback` as the redirect URI in your OLX app settings and put the same URL in `.env` as `redirect_uri=`.
 
 ## Commands

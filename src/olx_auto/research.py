@@ -33,7 +33,7 @@ The seller's statements are facts about their item and win over the photos."""
 
 
 def research(llm: LLM, model: str, observations: dict, note: str,
-             answered: list[dict] = (), messages: list[str] = ()) -> tuple[dict, Reply]:
+             answered: list[dict] = (), messages: list[str] = (), engine: str = "") -> tuple[dict, Reply]:
     """Returns the facts with `sources` ([{url, title}] of the pages the search found) added."""
     parts = ["## Observations (from the photos)\n" + json.dumps(observations, ensure_ascii=False, indent=1),
              "## Seller's note\n" + (note or "(none)")]
@@ -44,9 +44,14 @@ def research(llm: LLM, model: str, observations: dict, note: str,
         parts.append("## Seller's messages (oldest first)\n" + "\n".join(f"- {m}" for m in messages))
     reply = llm.chat(model, [{"role": "system", "content": PROMPT},
                              {"role": "user", "content": "\n\n".join(parts)}],
-                     response_format={"type": "json_object"}, extra_body={"plugins": [WEB_PLUGIN]})
+                     response_format={"type": "json_object"}, extra_body={"plugins": [web_plugin(engine)]})
     facts = parse_json(reply.text)
     # web links only (they become hrefs on the card), each once
     facts["sources"] = list({c["url"]: c for c in reply.citations
                              if c["url"].startswith(("https://", "http://"))}.values())
     return facts, reply
+
+
+def web_plugin(engine: str = "") -> dict:
+    """No engine leaves the choice to OpenRouter: the model provider's own search when it has one."""
+    return {**WEB_PLUGIN, "engine": engine} if engine else WEB_PLUGIN

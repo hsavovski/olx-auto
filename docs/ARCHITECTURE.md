@@ -97,7 +97,7 @@ added since a listing was written, so older listings keep working.
 ## Key flows
 
 ### Login
-`POST /login` → `users.authenticate` (constant-time compare; an unknown user still costs one scrypt) → `session["user"] = name`. The session is a signed cookie (Starlette `SessionMiddleware`) lasting 90 days with `SameSite=Lax`. A failed login sleeps 1 s. The `CurrentUser` dependency resolves the session to a `User` or raises `LoginRequired`, which redirects to `/login`. Every page except `/login` depends on it.
+`POST /login` → `users.authenticate` (constant-time compare; an unknown user still costs one scrypt) → `session["user"] = name`. The session is a signed cookie (Starlette `SessionMiddleware`) lasting 90 days with `SameSite=Lax`. A failed login sleeps 1 s. `users.LoginThrottle` (in memory, per user name) refuses a name with 429 for 15 minutes after 10 failures within 15 minutes, since the app is public through Tailscale Funnel; a success clears the name's count. The `CurrentUser` dependency resolves the session to a `User` or raises `LoginRequired`, which redirects to `/login`. Every page except `/login` depends on it.
 
 ### Per-user scoping
 Route handlers reach data only through the `User` they receive from `CurrentUser`. Before a path is built from request input, it is validated against a regex: `users.NAME_RE`, `listings.ID_RE` and `listings.PHOTO_RE`. Anything else is a 404. This prevents both cross-user access and path traversal (both are tested).
@@ -115,7 +115,7 @@ The handlers are plain `def` functions, so FastAPI runs them in its threadpool a
 ### Drafting (vision + research + agent)
 After a successful upload, `POST /listings` adds `drafting.generate` as a FastAPI background task (only when `OPENROUTER_API_KEY` is set). `olx-auto draft <user> <id> [-m "message"] [--fresh]` runs the same thing in the foreground. `generate`:
 1. **Vision** (skipped if `observations` already exist): `vision.observe` sends every photo as a base64 data URL plus the note, with `response_format: json_object`, and stores the observations.
-2. **Research** (skipped if `research_seen` matches the current count of messages and answered questions): `research.research` makes one `RESEARCH_MODEL` call with `extra_body={"plugins": [web]}` and `response_format: json_object`. OpenRouter searches and adds the results to the prompt; its `url_citation` annotations become `sources` (http(s) only, deduplicated). On `LLMError` the error is traced, the previous facts (or none) are used and `research_seen` is left as it was, so the next run tries again.
+2. **Research** (skipped if `research_seen` matches the current count of messages and answered questions): `research.research` makes one `RESEARCH_MODEL` call with `extra_body={"plugins": [web]}` (engine from `SEARCH_ENGINE`; empty lets OpenRouter pick, which is the provider's own search for Google/OpenAI/Anthropic models) and `response_format: json_object`. OpenRouter searches and adds the results to the prompt; its `url_citation` annotations become `sources` (http(s) only, deduplicated). On `LLMError` the error is traced, the previous facts (or none) are used and `research_seen` is left as it was, so the next run tries again.
 3. **Agent**: `agent.run_agent` gets the observations, the research facts (without `sources`), note, profile (without `contact`), style guide, current draft, locked fields, answered questions and all of the listing's messages. Tools: `look_at_photos` (a `vision.ask` call, costed as vision), `suggest_category`, `get_category_attributes` (rejects non-leaf and `photos_limit == 0` categories), `search_olx_comparables` (only when comparing, see below), `ask_user`, `submit_draft`.
 4. `submit_draft` runs `validation.check_draft` against the category's attributes. Problems go back to the model as the tool result; a clean draft ends the run.
 5. Guardrails: at `AGENT_MAX_COST` the run stops; on the last of `AGENT_MAX_ITERATIONS` turns, `tool_choice` forces `submit_draft`. The last submitted draft is kept even if it still has problems; with none, the previous draft stays.
@@ -193,7 +193,8 @@ Read by `Settings.load()` from `.env` at the repo root, with environment variabl
 | `DATA_DIR` | Runtime data root, default `./data` |
 | `SESSION_SECRET` | Optional; otherwise generated into `data/.session_secret` |
 | `OPENROUTER_API_KEY` | OpenRouter key; drafting is off without it |
-| `VISION_MODEL`, `AGENT_MODEL` | OpenRouter model ids (defaults in `config.py`) |
+| `VISION_MODEL`, `RESEARCH_MODEL`, `AGENT_MODEL` | OpenRouter model ids (defaults in `config.py`) |
+| `SEARCH_ENGINE` | OpenRouter web search engine for research: `exa`, `parallel`, `native`, `perplexity`, `firecrawl`, or empty (OpenRouter picks) |
 | `AGENT_MAX_ITERATIONS`, `AGENT_MAX_COST` | Guardrails per agent run (15, $0.50) |
 | `SHOW_TRACE` | Show the trace panel on the card |
 | `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Photo bucket for submit (`infra/s3-setup.sh`); submit fails with a clear error without them |

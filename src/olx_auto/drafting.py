@@ -126,14 +126,15 @@ def _research(settings: Settings, user: User, listing_id: str, llm: LLM, observa
     _update(user, listing_id, progress="Looking up the product…")
     try:
         facts, reply = research.research(llm, settings.research_model, observations, listing["note"],
-                                         answered, messages)
+                                         answered, messages, settings.search_engine)
     except LLMError as e:
         _append_trace(user, listing_id, {"stage": "research", "model": settings.research_model,
-                                         "at": _now(), "error": str(e)})
+                                         "engine": settings.search_engine, "at": _now(), "error": str(e)})
         return listing["research"]
     _add_cost(user, listing_id, research=reply.cost)
     _update(user, listing_id, research=facts, research_seen=seen)
-    _append_trace(user, listing_id, {"stage": "research", "model": reply.model, "at": _now(),
+    _append_trace(user, listing_id, {"stage": "research", "model": reply.model,
+                                     "engine": settings.search_engine, "at": _now(),
                                      "usage": reply.usage, "research": facts})
     return facts
 

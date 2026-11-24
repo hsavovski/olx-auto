@@ -21,7 +21,7 @@ Secondary goal: learn how to build AI tools. The agent is deliberately hand-writ
 - **Small, fixed set of app users**, one per OLX account (e.g. `ico` and `ico-test`). Created via CLI (`uv run olx-auto add-user`); no signup page.
 - Each user has their own password, profile, style guide, OLX connection, listings and cost totals.
 - Login page with password → long-lived session cookie. All requests are scoped to the logged-in user's folder.
-- Hosting: runs on the Mac, exposed on the tailnet with `tailscale serve` (HTTPS). The login exists in case it is ever exposed more widely.
+- Hosting: runs on the Mac, exposed on the public internet with `tailscale funnel` (HTTPS, same `ts.net` URL as on the tailnet), so users don't need Tailscale. The login is the only protection: a user name is locked for 15 minutes after 10 wrong passwords.
 
 ### OLX accounts
 
@@ -60,7 +60,7 @@ Reason for the split: in a tool loop the whole history is resent every turn, so 
 
 ### Stage 1b: Research (`RESEARCH_MODEL`, small cheap model)
 
-One call on **every** listing, with OpenRouter's web plugin: observations + note + the seller's answers and messages → product **facts** JSON: what it was identified as, confidence, specs, features, how variants differ, new price, release year, plus the source pages. It gives the agent the labels, models and sizes it needs for attributes and a detailed description.
+One call on **every** listing, with OpenRouter's web plugin (engine set by `SEARCH_ENGINE`; the search fee, not the model, is most of this stage's cost): observations + note + the seller's answers and messages → product **facts** JSON: what it was identified as, confidence, specs, features, how variants differ, new price, release year, plus the source pages. It gives the agent the labels, models and sizes it needs for attributes and a detailed description.
 
 - A fixed step rather than an agent tool: it's always wanted, a small model is enough for it, and the facts reach the agent as text instead of search results resent on every turn.
 - Reruns on a refinement only when the seller has added messages or answers since (they may have corrected the model); otherwise the saved facts are reused.
@@ -148,7 +148,7 @@ data/users/<user>/
     trace.json
 ```
 
-Global config in `.env`: OLX `client_id`/`client_secret`, OpenRouter key, `VISION_MODEL`, `AGENT_MODEL`, cost/iteration caps, `SHOW_TRACE`, S3 bucket + credentials, session secret.
+Global config in `.env`: OLX `client_id`/`client_secret`, OpenRouter key, `VISION_MODEL`, `RESEARCH_MODEL`, `AGENT_MODEL`, `SEARCH_ENGINE`, cost/iteration caps, `SHOW_TRACE`, S3 bucket + credentials, session secret.
 
 ## 11. Tech stack
 

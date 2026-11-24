@@ -21,6 +21,28 @@ def test_wrong_password(client, user, monkeypatch):
     assert "Wrong user name or password" in r.text
 
 
+def test_login_locks_a_name_after_repeated_wrong_passwords(client, user, monkeypatch):
+    monkeypatch.setattr("olx_auto.web.app.time.sleep", lambda s: None)
+    for _ in range(10):
+        assert client.post("/login", data={"username": "ico", "password": "nope"}).status_code == 401
+    r = client.post("/login", data={"username": "ico", "password": PASSWORD}, follow_redirects=False)
+    assert r.status_code == 429 and "Too many wrong passwords" in r.text
+
+
+def test_login_throttle_forgets_old_failures_and_resets_on_success():
+    now = [0.0]
+    throttle = users.LoginThrottle(max_failures=2, window=60, clock=lambda: now[0])
+    throttle.failed("ico")
+    throttle.failed("ico")
+    assert throttle.locked("ico") and not throttle.locked("other")
+    now[0] = 61
+    assert not throttle.locked("ico")
+    throttle.failed("ico")
+    throttle.succeeded("ico")
+    throttle.failed("ico")
+    assert not throttle.locked("ico")
+
+
 def test_home_shows_not_connected_banner(logged_in):
     r = logged_in.get("/")
     assert r.status_code == 200

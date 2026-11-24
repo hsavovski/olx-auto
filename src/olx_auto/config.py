@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_VISION_MODEL = "google/gemini-3.5-flash-lite"
 DEFAULT_RESEARCH_MODEL = "google/gemini-3.5-flash-lite"
 DEFAULT_AGENT_MODEL = "anthropic/claude-sonnet-5.5"
+# OpenRouter web search engine for research (SEARCH_ENGINE); empty lets OpenRouter pick
+DEFAULT_SEARCH_ENGINE = ""
+SEARCH_ENGINES = ("", "native", "exa", "parallel", "perplexity", "firecrawl")
 
 
 def load_env(path: Path) -> dict[str, str]:
@@ -34,6 +37,7 @@ class Settings:
     vision_model: str = DEFAULT_VISION_MODEL
     research_model: str = DEFAULT_RESEARCH_MODEL
     agent_model: str = DEFAULT_AGENT_MODEL
+    search_engine: str = DEFAULT_SEARCH_ENGINE
     agent_max_iterations: int = 15
     agent_max_cost: float = 0.50  # USD per agent run
     show_trace: bool = False
@@ -56,6 +60,7 @@ class Settings:
             vision_model=env.get("VISION_MODEL") or DEFAULT_VISION_MODEL,
             research_model=env.get("RESEARCH_MODEL") or DEFAULT_RESEARCH_MODEL,
             agent_model=env.get("AGENT_MODEL") or DEFAULT_AGENT_MODEL,
+            search_engine=_engine(env.get("SEARCH_ENGINE", DEFAULT_SEARCH_ENGINE)),
             agent_max_iterations=int(env.get("AGENT_MAX_ITERATIONS") or 15),
             agent_max_cost=float(env.get("AGENT_MAX_COST") or 0.50),
             show_trace=env.get("SHOW_TRACE", "").lower() in ("1", "true", "yes"),
@@ -64,6 +69,14 @@ class Settings:
             aws_access_key_id=env.get("AWS_ACCESS_KEY_ID", ""),
             aws_secret_access_key=env.get("AWS_SECRET_ACCESS_KEY", ""),
         )
+
+
+def _engine(value: str) -> str:
+    value = value.strip().lower()
+    if value not in SEARCH_ENGINES:
+        names = ", ".join(e for e in SEARCH_ENGINES if e)
+        raise ValueError(f"SEARCH_ENGINE must be one of {names} (or empty)")
+    return value
 
 
 def _persistent_secret(data_dir: Path) -> str:

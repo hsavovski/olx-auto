@@ -7,6 +7,7 @@ import pytest
 from openai.types.chat import ChatCompletion
 
 from olx_auto import agent, drafting, listings, research, style, validation, vision
+from olx_auto.config import Settings
 from olx_auto.llm import LLM, LLMError, Reply, parse_json
 from tests.conftest import jpeg_bytes
 
@@ -170,10 +171,27 @@ def test_research_searches_the_web_and_keeps_web_links_once():
                                  [{"question": "Модел?", "answer": "Liteway 3"}], ["по-евтино"])
     assert facts == {**RESEARCH, "sources": [{"url": "https://example.com/liteway", "title": "Liteway"}]}
     request = llm.requests[0]
-    assert request["extra_body"] == {"plugins": [research.WEB_PLUGIN]}
+    assert request["extra_body"] == {"plugins": [{"id": "web", "max_results": 5}]}
     assert request["response_format"] == {"type": "json_object"}
     prompt = request["messages"][1]["content"]
     assert '"brand": "Chicco"' in prompt and "Liteway 3" in prompt and "по-евтино" in prompt
+
+
+def test_research_uses_the_configured_search_engine():
+    llm = FakeLLM(research_reply())
+    research.research(llm, "research-model", OBSERVATIONS, "", engine="exa")
+    assert llm.requests[0]["extra_body"] == {"plugins": [{"id": "web", "max_results": 5, "engine": "exa"}]}
+
+
+def test_search_engine_setting_is_checked(tmp_path, monkeypatch):
+    monkeypatch.delenv("SEARCH_ENGINE", raising=False)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    env = tmp_path / ".env"
+    env.write_text("SEARCH_ENGINE=Exa\n")
+    assert Settings.load(env).search_engine == "exa"
+    env.write_text("SEARCH_ENGINE=google\n")
+    with pytest.raises(ValueError, match="SEARCH_ENGINE"):
+        Settings.load(env)
 
 
 def test_research_reruns_only_when_the_seller_says_more(ai_settings, user):
@@ -216,8 +234,8 @@ def test_failed_research_is_traced_and_drafting_goes_on(ai_settings, user):
     assert out["draft"] == GOOD_DRAFT and out["ai_error"] is None
     assert out["research"] is None and out["research_seen"] is None  # tried again next run
     trace = json.loads(listings.trace_path(user, listing["id"]).read_text())
-    assert trace["runs"][0] == {"stage": "research", "model": "research-model", "at": trace["runs"][0]["at"],
-                                "error": "research-model: 503"}
+    assert trace["runs"][0] == {"stage": "research", "model": "research-model", "engine": "",
+                                "at": trace["runs"][0]["at"], "error": "research-model: 503"}
     assert "Product information" not in agent.build_context(agent.AgentInput(observations=OBSERVATIONS))
 
 

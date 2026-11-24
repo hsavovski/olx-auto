@@ -65,12 +65,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def login_page(request: Request):
         return render(request, "login.html")
 
+    throttle = users.LoginThrottle()
+
     @app.post("/login")
     def login(request: Request, username: Annotated[str, Form()], password: Annotated[str, Form()]):
-        user = users.authenticate(settings.data_dir, username.strip().lower(), password)
+        name = username.strip().lower()
+        if throttle.locked(name):
+            time.sleep(1)
+            return render(request, "login.html", 429,
+                          error="Too many wrong passwords. Try again in 15 minutes.")
+        user = users.authenticate(settings.data_dir, name, password)
         if not user:
+            throttle.failed(name)
             time.sleep(1)  # slow down guessing
             return render(request, "login.html", 401, error="Wrong user name or password")
+        throttle.succeeded(name)
         request.session.clear()
         request.session["user"] = user.name
         return redirect("/")

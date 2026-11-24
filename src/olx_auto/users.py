@@ -6,6 +6,8 @@ import os
 import re
 import secrets
 import shutil
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -122,6 +124,34 @@ def set_password(user: User, password: str) -> None:
 
 def set_display_name(user: User, display_name: str) -> None:
     _update_meta(user, display_name=display_name.strip() or user.name)
+
+
+class LoginThrottle:
+    """Failed logins per user name, kept in memory. After `max_failures` within `window` seconds the
+    name is locked until the oldest of them is `window` old, so the app can face the internet."""
+
+    def __init__(self, max_failures: int = 10, window: float = 15 * 60, clock=time.monotonic):
+        self.max_failures, self.window, self.clock = max_failures, window, clock
+        self._failures: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def _recent(self, name: str, now: float) -> list[float]:
+        return [t for t in self._failures.get(name, []) if now - t < self.window]
+
+    def locked(self, name: str) -> bool:
+        with self._lock:
+            return len(self._recent(name, self.clock())) >= self.max_failures
+
+    def failed(self, name: str) -> None:
+        with self._lock:
+            now = self.clock()
+            # drop expired names too, so guessed user names can't grow the dict forever
+            self._failures = {n: r for n in self._failures if (r := self._recent(n, now))}
+            self._failures.setdefault(name, []).append(now)
+
+    def succeeded(self, name: str) -> None:
+        with self._lock:
+            self._failures.pop(name, None)
 
 
 def authenticate(data_dir: Path, name: str, password: str) -> User | None:
