@@ -97,7 +97,7 @@ added since a listing was written, so older listings keep working.
 ## Key flows
 
 ### Login
-`POST /login` → `users.authenticate` (constant-time compare; an unknown user still costs one scrypt) → `session["user"] = name`. The session is a signed cookie (Starlette `SessionMiddleware`) lasting 90 days with `SameSite=Lax`. A failed login sleeps 1 s. `users.LoginThrottle` (in memory, per user name) refuses a name with 429 for 15 minutes after 10 failures within 15 minutes, since the app is public through Tailscale Funnel; a success clears the name's count. The `CurrentUser` dependency resolves the session to a `User` or raises `LoginRequired`, which redirects to `/login`. Every page except `/login` depends on it.
+`POST /login` → `users.authenticate` (constant-time compare; an unknown user still costs one scrypt) → `session["user"] = name` and `session["key"] = users.session_key` (an HMAC of the stored password hash with the session secret). The session is a signed cookie (Starlette `SessionMiddleware`) lasting 90 days with `SameSite=Lax`. A failed login sleeps 1 s. `users.LoginThrottle` (in memory, per user name) refuses a name with 429 for 15 minutes after 10 failures within 15 minutes, since the app is public through Tailscale Funnel; a success clears the name's count. The `CurrentUser` dependency resolves the session to a `User`, checking that `key` still matches (so a password change, on the web or with `set-password`, ends every other session; the web form re-keys the session that made it), or raises `LoginRequired`, which redirects to `/login`. Every page except `/login` depends on it.
 
 ### Per-user scoping
 Route handlers reach data only through the `User` they receive from `CurrentUser`. Before a path is built from request input, it is validated against a regex: `users.NAME_RE`, `listings.ID_RE` and `listings.PHOTO_RE`. Anything else is a 404. This prevents both cross-user access and path traversal (both are tested).
@@ -162,7 +162,7 @@ The home page and a posted listing's card call `submitting.refresh_status` (at m
 ### Profile
 `/settings/profile` edits the user's data. `profiles.load` fills in missing sections, and saving keeps keys it doesn't know about.
 - `POST /settings/profile`: display name (`user.json`), contact, advertiser type, delivery. `profiles.update_details` validates first (name required, phone/email format) and changes nothing on error.
-- **Location**: the "Use my location" button reads the browser's geolocation (needs HTTPS, i.e. the tailnet URL, or localhost) and reloads with `?lat&lng`. The page shows the nearest unique city/district pairs from OLX `/locations` (client token). `POST /settings/profile/location` sends back the point and the chosen index. The server looks the point up again instead of trusting ids and names from the form. A choice without a district is refused if OLX lists districts for that city (`/cities/{id}/districts`), because OLX then requires one. It stores ids **and names** (so pages can show them without another OLX call). The coordinates are not stored.
+- **Location**: the "Use my location" button reads the browser's geolocation (needs HTTPS, i.e. the `ts.net` URL, or localhost) and reloads with `?lat&lng`. The page shows the nearest unique city/district pairs from OLX `/locations` (client token). `POST /settings/profile/location` sends back the point and the chosen index. The server looks the point up again instead of trusting ids and names from the form. A choice without a district is refused if OLX lists districts for that city (`/cities/{id}/districts`), because OLX then requires one. It stores ids **and names** (so pages can show them without another OLX call). The coordinates are not stored.
 - `POST /settings/password`: current password checked with `users.authenticate` (1 s sleep on failure, as on `/login`), new one at least 8 characters and repeated.
 
 ### Style learning
@@ -175,7 +175,7 @@ The home page and a posted listing's card call `submitting.refresh_status` (at m
 - `GET /olx/callback?code&state` checks the state, then exchanges the code. This only works if the OLX app's registered redirect URI points at this app (`redirect_uri` in `.env`).
 - `POST /settings/olx/code` is the fallback: paste the redirect URL or the bare code.
 - The exchanged tokens go to the user's `olx_token.json`. `/settings/olx` calls `/users/me` to show *which* OLX account is connected.
-- The home page shows a "not connected" banner when there's no user token.
+- The home page shows a "not connected" banner when there's no user token. A dead token (refresh rejected) is not detected up front: the failing call reports it, and the OLX page shows "Connection is broken".
 
 ### OLX client
 `Olx(token_file, client_id, client_secret, redirect_uri)`. The client-credentials token (public data) and the user token are cached in the same file. `user_token()` refreshes automatically and writes the **rotated** refresh token back. `users.User.olx(settings)` builds a client for a user.
@@ -233,4 +233,4 @@ Tests construct `Settings(...)` directly with a `tmp_path` data dir and never re
 
 ## Not built yet
 
-Autostart, cost overview, model comparison. Order and parallelism are in spec §12.
+Autostart, model comparison, a banner for a dead OLX token. See spec §12 step 8.

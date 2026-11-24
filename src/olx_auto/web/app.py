@@ -31,9 +31,11 @@ def settings_of(request: Request) -> Settings:
 
 
 def current_user(request: Request) -> users.User:
+    settings = settings_of(request)
     name = request.session.get("user")
-    user = users.get_user(settings_of(request).data_dir, name) if name else None
-    if not user:
+    user = users.get_user(settings.data_dir, name) if name else None
+    if not user or not secrets.compare_digest(request.session.get("key", ""),
+                                              users.session_key(user, settings.session_secret)):
         raise LoginRequired
     return user
 
@@ -81,7 +83,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return render(request, "login.html", 401, error="Wrong user name or password")
         throttle.succeeded(name)
         request.session.clear()
-        request.session["user"] = user.name
+        request.session.update(user=user.name, key=users.session_key(user, settings.session_secret))
         return redirect("/")
 
     @app.post("/logout")
@@ -327,6 +329,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if error:
             return _profile_page(request, user, 400, password_error=error)
         users.set_password(user, new)
+        request.session["key"] = users.session_key(user, settings.session_secret)  # keep this one
         return redirect("/settings/profile?message=Password+changed")
 
     # ---- style guide ------------------------------------------------------

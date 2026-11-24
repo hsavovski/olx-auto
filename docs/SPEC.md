@@ -20,14 +20,14 @@ Secondary goal: learn how to build AI tools. The agent is deliberately hand-writ
 
 - **Small, fixed set of app users**, one per OLX account (e.g. `ico` and `ico-test`). Created via CLI (`uv run olx-auto add-user`); no signup page.
 - Each user has their own password, profile, style guide, OLX connection, listings and cost totals.
-- Login page with password → long-lived session cookie. All requests are scoped to the logged-in user's folder.
+- Login page with password → long-lived session cookie. Changing the password ends every other session. All requests are scoped to the logged-in user's folder.
 - Hosting: runs on the Mac, exposed on the public internet with `tailscale funnel` (HTTPS, same `ts.net` URL as on the tailnet), so users don't need Tailscale. The login is the only protection: a user name is locked for 15 minutes after 10 wrong passwords.
 
 ### OLX accounts
 
 - One OLX *application* (`client_id`/`client_secret`, global). Any OLX account can be connected to it via the `authorization_code` flow, and each gets its own token.
 - **Development uses a separate test OLX account** (app user `ico-test`; verified: it connects to the same OLX app). This protects the real account's free-ad quotas and seller profile. Test posts still use up the test account's per-category free quota, even when they're deleted before going live, so spread them across categories.
-- **Settings → Connect OLX**: in-browser OAuth flow redirecting back to the app's tailnet URL (which must be registered in the OLX app settings). A banner is shown when the token is dead. The refresh token lasts about a month and rotates on use. `olx-auto login <user>` is the CLI fallback.
+- **Settings → Connect OLX**: in-browser OAuth flow redirecting back to the app's `ts.net` URL (which must be registered in the OLX app settings). The home page shows a banner when no account is connected; a dead token is reported on the OLX page and by the failing call (a banner for it is still to do). The refresh token lasts about a month and rotates on use. `olx-auto login <user>` is the CLI fallback.
 
 ## 4. User flow
 
@@ -163,7 +163,7 @@ Global config in `.env`: OLX `client_id`/`client_secret`, OpenRouter key, `VISIO
 
 The spike comes first, because its answers can change the design. After the skeleton (storage layout) exists, vision, comparables and UI work can proceed in parallel.
 
-Progress (2026-11-23): **steps 1–6 are done**; step 7 (comparables) is built and waits for a real drafting run to judge it. One real drafting run on photos (test account) worked end to end.
+Progress (2026-11-24): **v1 is done** (steps 1–7). The real account `ico` has live listings. Step 7 (comparables) still needs judging against the AI estimate over 10–20 listings (§7). Step 8 (polish) is open.
 
 | Step | Status | Where |
 |---|---|---|
@@ -174,10 +174,10 @@ Progress (2026-11-23): **steps 1–6 are done**; step 7 (comparables) is built a
 | 5. Listing card UI | ✅ done, plus style learning (§5) | `web/templates/listing.html`, `style.py`, Style page |
 | 6. Validation + submit | ✅ done: first real post on `ico-test` went `active` in under 12 min | `validation.py`, `adverts.py`, `s3.py`, `submitting.py` |
 | 7. Comparables scraper | built and tested offline; checked by hand against live olx.bg | `comparables.py`, agent tool, "Compare prices on OLX" button |
-| 8. Polish | not started | |
+| 8. Polish | started: Funnel hosting with login lockout, `SEARCH_ENGINE` setting. To do: autostart, model comparison, dead-connection banner | |
 
 1. **Spike: OLX API.** Connect a second (test) OLX account to the existing app; post one real advert with S3 images; check the initial status, currency format, title/description limits, and which categories are open to the API on .bg; delete the S3 objects and check whether the images survive; deactivate → delete.
-   *Done:* test account connected; real posts made (no images, then S3 images); EUR confirmed; validation rules and error format mapped; status lifecycle and the free-quota `limited` state found; OLX copies images to its CDN, so S3 retention is minimal; S3 bucket + bucket-only IAM user created and permission-tested. Still open, but not blocking: moderation time to `active`, the exact free quota per category.
+   *Done:* test account connected; real posts made (no images, then S3 images); EUR confirmed; validation rules and error format mapped; status lifecycle and the free-quota `limited` state found; OLX copies images to its CDN, so S3 retention is minimal; S3 bucket + bucket-only IAM user created and permission-tested. Moderation took under 12 minutes on the first real post. Still open, but not blocking: what a rejection looks like, the exact free quota per category.
 2. **Skeleton.** Repo layout, users + login, CLI `add-user`, per-user storage, photo upload/processing, Connect OLX page.
    *Done:* FastAPI app with login (scrypt, signed session cookie), per-user folders and scoping, CLI (`serve`, `add-user`, `set-password`, `login`, `check`), photo upload (HEIC, EXIF/GPS stripped, resized), listing folders, in-browser Connect OLX + paste-code fallback, CI (ruff, pytest, gitleaks). 30 tests pass. Users `ico` and `ico-test` exist, both connected to OLX.
 3. **Vision stage.**
@@ -185,8 +185,8 @@ Progress (2026-11-23): **steps 1–6 are done**; step 7 (comparables) is built a
 5. **Listing card UI**: progress, editing, locks, questions, refinement, trace panel.
 6. **Validation + submit** (S3 upload, OLX create, failed/resubmit).
 7. **Comparables scraper.**
-8. **Polish**: launchd autostart, cost overview, model comparison.
-   *To do:* register `https://<mac>.<tailnet>.ts.net/olx/callback` as the redirect URI in the OLX developer app and set the same URL as `redirect_uri=` in `.env`, so Connect OLX lands back on the app instead of needing the paste-code fallback.
+8. **Polish**: launchd autostart, model comparison (cost and hand-edit rate per model pair), a reconnect banner when the OLX token is dead.
+   *Done:* public hosting via Tailscale Funnel with a login lockout; `SEARCH_ENGINE` for research; the OLX redirect URI points at the app's `ts.net` callback.
 
 ## 13. Future
 

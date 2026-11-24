@@ -2,7 +2,7 @@
 
 Take a few photos on your phone → an AI agent drafts a complete [olx.bg](https://www.olx.bg) listing → you review, tweak and submit.
 
-> **Status:** early. Login, users, connecting OLX accounts, AI drafting (vision + agent), the listing card with style learning, and posting to OLX (with status tracking) work. Price comparables from OLX search are next. See the [work order](docs/SPEC.md#12-work-order).
+> **Status:** v1 works end to end: phone photos → AI draft (vision, web research, agent) → review on the listing card → live OLX advert, with style learning and on-demand price comparables from olx.bg. Left: autostart, model comparison, and a banner for an expired OLX connection. See the [work order](docs/SPEC.md#12-work-order).
 
 - [docs/GUIDE.md](docs/GUIDE.md): how the app works, in plain language with diagrams
 - [docs/SPEC.md](docs/SPEC.md): what we're building and why
@@ -61,7 +61,7 @@ In the app, open **OLX** (top right) → **Connect OLX**.
 
 The OLX page then shows **"Connected as …"**, so check that it's the right account. From the terminal, `uv run olx-auto login <user>` does the same thing, and `uv run olx-auto check <user>` tests the connection.
 
-The connection lasts as long as you use the app at least about once a month. If it expires, the home page shows a banner. Just connect again.
+The connection lasts as long as you use the app at least about once a month. If it was never connected, the home page shows a banner. If it has expired, OLX calls (such as Submit) fail with an error and the OLX page says the connection is broken. Just connect again.
 
 ### Use it from your phone (Tailscale)
 

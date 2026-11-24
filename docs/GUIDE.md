@@ -365,6 +365,8 @@ uv run ruff check . && uv run pytest -q          # the "done" check from CLAUDE.
 ## 12. Known limits and open questions
 
 - **Token lock is per process.** The CLI and the web server renewing the OLX token at the same instant could still collide.
+- **An expired OLX connection isn't flagged up front.** The home page only warns when no account was ever connected. If the token has died (about a month unused), Submit fails with an error and the OLX page says the connection is broken. Reconnect there.
+- **The app is on the public internet** (Tailscale Funnel). Only the passwords protect it, with a 15-minute lockout after 10 wrong ones per user name.
 - **Deleting a photo doesn't redo vision.** Observations may still mention a deleted photo by number.
 - **Web facts can be wrong.** The research model may pick the wrong variant or a bad source. It reports a confidence, the agent shouldn't state low-confidence specs, and the card shows the facts with their sources so you can check them.
 - **Comparables can break without warning.** They come from olx.bg's web page, not an API. If OLX changes the page or blocks the requests, the comparing run carries on without them and the trace shows the error.

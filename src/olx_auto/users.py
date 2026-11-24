@@ -122,6 +122,13 @@ def set_password(user: User, password: str) -> None:
     _update_meta(user, password=hash_password(password))
 
 
+def session_key(user: User, secret: str) -> str:
+    """Stored in the session cookie and checked on every request. It changes with the password, so
+    a password change (web or CLI) ends every other session, e.g. on a lost phone."""
+    stored = json.loads(user.meta_file.read_text()).get("password", "")
+    return hmac.new(secret.encode(), stored.encode(), hashlib.sha256).hexdigest()[:32]
+
+
 def set_display_name(user: User, display_name: str) -> None:
     _update_meta(user, display_name=display_name.strip() or user.name)
 

@@ -125,6 +125,13 @@ def test_change_password(logged_in, settings, user, monkeypatch):
     assert r.headers["location"] == "/settings/profile?message=Password+changed"
     assert users.authenticate(settings.data_dir, "ico", "new password 1")
     assert not users.authenticate(settings.data_dir, "ico", PASSWORD)
+    assert logged_in.get("/settings/profile").status_code == 200  # this session stays
+
+
+def test_password_change_ends_other_sessions(logged_in, user):
+    users.set_password(user, "changed elsewhere")  # e.g. `olx-auto set-password` or another device
+    r = logged_in.get("/", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login"
 
 
 def test_profile_requires_login(client):
