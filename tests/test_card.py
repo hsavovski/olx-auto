@@ -108,7 +108,17 @@ def test_refine_saves_answers_and_message_then_redrafts(client, user, drafted, s
     assert [m["text"] for m in listing["messages"]] == ["Има и дъждобран. Направи го по-кратко."]
     assert started == [("generate", drafted["id"])]
     page = client.get(f"/listings/{drafted['id']}").text
-    assert "Има и дъждобран" in page and 'http-equiv="refresh"' in page
+    assert "Има и дъждобран" in page and f"/listings/{drafted['id']}/progress" in page
+
+
+def test_progress_is_polled_instead_of_reloading(client, user, drafted):
+    assert client.get(f"/listings/{drafted['id']}/progress").json() == {"running": False, "progress": None}
+    assert "/progress" not in client.get(f"/listings/{drafted['id']}").text
+
+    drafting.mark_started(user, drafted["id"])
+    progress = listings.load(user, drafted["id"])["progress"]
+    assert client.get(f"/listings/{drafted['id']}/progress").json() == {"running": True, "progress": progress}
+    assert client.get("/listings/nope/progress").status_code == 404
 
 
 def test_delete_photo_keeps_the_last_one(client, user):

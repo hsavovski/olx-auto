@@ -123,7 +123,7 @@ After a successful upload, `POST /listings` adds `drafting.generate` as a FastAP
 7. Answered questions are kept; unanswered ones are replaced by this run's questions. `draft`, `ai_draft` and `category` (with attribute definitions, for the card) are saved.
 8. Style learning runs on any new feedback (below). Its failure is reported in `ai_error`; the draft stays.
 
-Each step updates `progress` in `listing.json` (reloading the file before each write); the listing page auto-refreshes while it's set. Costs come from OpenRouter's `usage.cost` and are added per stage. Errors (`LLMError`, `OlxError`, …) end up in `ai_error`. Every run is appended to `trace.json`: the vision observations and usage, the research facts and usage (or its error), plus the agent's full message list, per-call usage and stop reason. Images never go into the trace.
+Each step updates `progress` in `listing.json` (reloading the file before each write); the listing page polls it while it's set. Costs come from OpenRouter's `usage.cost` and are added per stage. Errors (`LLMError`, `OlxError`, …) end up in `ai_error`. Every run is appended to `trace.json`: the vision observations and usage, the research facts and usage (or its error), plus the agent's full message list, per-call usage and stop reason. Images never go into the trace.
 
 `agent.Catalog` is the category-data interface the tools use. `Olx` satisfies it with the client token; a disk cache of the category tree (spike-notes.md) can replace it.
 
@@ -137,14 +137,14 @@ Each step updates `progress` in `listing.json` (reloading the file before each w
 Anything unexpected (HTTP error, no embedded JSON, a different shape) raises `ComparablesError`; the agent gets it as a tool error and prices from its own knowledge. The agent sees titles, prices, condition and dates (no links) and judges which adverts really compare. The tool is offered (and `agent.COMPARE_PROMPT` added) only in a run started by `POST /listings/{id}/compare`, i.e. `drafting.generate(..., compare=True)`; other runs never search. At most 3 searches per run. `drafting` saves the run's last search as `comparables`; a run without one keeps the previous one, and every run gets the saved one (without links) in its context. The card's price section shows its median, middle half, count, a link to the search and the top adverts.
 
 ### Listing card
-`GET /listings/{id}` renders the draft as a form. While `listings.is_running` (progress set and written in the last 10 minutes, so a run killed by a restart doesn't block forever), the page refreshes every 3 s, the forms are disabled, and the POST routes below redirect back without changing anything.
+`GET /listings/{id}` renders the draft as a form. While `listings.is_running` (progress set and written in the last 10 minutes, so a run killed by a restart doesn't block forever), a small script polls `GET /listings/{id}/progress` (`{running, progress}`) every 3 s, updates the progress line in place and reloads the page once the run ends (a `<noscript>` meta refresh covers no-JS); the forms are disabled, and the POST routes below redirect back without changing anything.
 - **To fix before submitting** is `validation.submit_problems(listing, profile)`, computed on every page view because the profile can change at any time: `check_draft` plus category loaded, photo count (≥ 1, ≤ `photos_limit`), location and contact name. The stored `problems` field stays `check_draft` only (what the agent last saw).
 - `POST /listings/{id}/edit`: title, description, price, negotiable, `attr_<code>` (one select, or checkboxes for multi-value attributes). `listings.edit_draft` compares canonically (so a re-ordered multi-value isn't a change), records each changed field in `edits` and locks it. `problems` is recomputed. If title, description or price changed, `drafting.try_learn_style` runs in the background.
 - `POST /listings/{id}/photos/{name}/delete` (name checked against `PHOTO_RE`) removes the photo from `photos` and from disk, so a listing can be brought under the category's `photos_limit`. The last photo can't be deleted, and the other photos keep their names. Observations that mention a photo by number aren't updated.
 - `POST /listings/{id}/unlock/{field}` removes a lock. The lock buttons sit inside the edit form but submit their own empty forms (`form="unlock-<field>"`), because forms can't be nested.
 - `POST /listings/{id}/compare`: `drafting.generate(..., compare=True)` in the background (needs a draft).
 - `POST /listings/{id}/refine`: `answer_<question id>` and `message` → answers saved, message appended to `messages` → `drafting.generate` in the background.
-- Background work is started through `_start`, which sets `progress` *before* the redirect, so the page the user lands on is already refreshing.
+- Background work is started through `_start`, which sets `progress` *before* the redirect, so the page the user lands on is already polling.
 - The trace panel (`SHOW_TRACE`) shows each run: vision observations, research facts or error, the agent's messages and tool calls (system prompt left out), and style learner results.
 
 ### Submit
@@ -213,7 +213,7 @@ Tests construct `Settings(...)` directly with a `tmp_path` data dir and never re
 - **Users are created only via CLI**, with no signup route (spec §3).
 - **Root `login.py` / `test_api.py` became `olx-auto login` / `olx-auto check`.** `add-user --import-token` copies an existing token file in.
 - **Costs are shown in USD** (Jinja filter `usd`), because OpenRouter bills in dollars. Listing *prices* are EUR.
-- **No HTMX.** The card is plain forms with redirects, and progress is a meta refresh while a run is going. Nothing has needed more so far.
+- **No HTMX.** The card is plain forms with redirects, and progress is a few lines of inline JS polling a JSON route while a run is going (a full meta refresh flashed and lost the scroll position on mobile). Nothing has needed more so far.
 - Verified against the real API with the test account: a second OLX account connects to the same app, and `/currencies` defaults to EUR. More in [spike-notes.md](spike-notes.md).
 
 ## Decisions made while building the AI stages

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -146,6 +146,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                       problems=validation.submit_problems(listing, profile),
                       cost=listings.total_cost(listing), trace=trace,
                       ai_enabled=bool(settings.openrouter_api_key))
+
+    @app.get("/listings/{listing_id}/progress")
+    def listing_progress(user: CurrentUser, listing_id: str):
+        """Polled by the card while a run is going, so it can update in place instead of reloading."""
+        try:
+            listing = listings.load(user, listing_id)
+        except KeyError:
+            return JSONResponse({"error": "not found"}, 404)
+        running = listings.is_running(listing)
+        return {"running": running, "progress": listing["progress"] if running else None}
 
     @app.post("/listings/{listing_id}/edit")
     async def edit_listing(request: Request, user: CurrentUser, listing_id: str,

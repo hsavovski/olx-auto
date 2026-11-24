@@ -147,7 +147,7 @@ sequenceDiagram
   L-->>Web: new listing folder, status "draft"
   Web->>D: start generate() in background
   Web-->>You: redirect to the listing card
-  Note over You,Web: Card refreshes every 3 s while "progress" is set
+  Note over You,Web: Card polls every 3 s while "progress" is set, reloads when done
   D->>V: observe(photos, note)
   V->>AI: photos as base64 + prompt
   AI-->>V: observations JSON
@@ -168,7 +168,7 @@ sequenceDiagram
 ```
 
 1. **Upload is checked before anything is saved.** 1 to 20 photos. Every photo is processed first, so a broken file leaves nothing half-written on disk.
-2. **The AI runs in the background.** FastAPI's `BackgroundTasks` runs `drafting.generate` after the page has answered. You see a progress line like "Choosing category…".
+2. **The AI runs in the background.** FastAPI's `BackgroundTasks` runs `drafting.generate` after the page has answered. You see a progress line like "Choosing category…", updated in place: a few lines of JavaScript ask `/listings/{id}/progress` every 3 s and reload the page once when the draft is ready.
 3. **Vision runs only once per listing.** Later refinements reuse the saved observations.
 4. **Research runs on every listing, but not on every run.** It runs again only when you've added answers or messages since the last lookup (you might have corrected the model). If the lookup fails, the agent carries on without it.
 5. **Errors never crash the run.** Any AI or OLX error ends up in the listing's `ai_error` field and is shown on the card.

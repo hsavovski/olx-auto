@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ draft.title or "Listing" }} · olx-auto{% endblock %}
-{% block head %}{% if running %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
+{% block head %}{% if running %}<noscript><meta http-equiv="refresh" content="3"></noscript>{% endif %}{% endblock %}
 
 {% macro field_label(name, label, for_id) -%}
 <div class="field-label">
@@ -34,7 +34,23 @@
 </div>
 
 {% if running %}
-<div class="banner info"><span class="spinner"></span><div><strong>{{ listing.progress }}</strong><br><span class="muted">You can close this page; the draft keeps going.</span></div></div>
+<div class="banner info"><span class="spinner"></span><div><strong id="progress">{{ listing.progress }}</strong><br><span class="muted">You can close this page; the draft keeps going.</span></div></div>
+<script>
+// Poll instead of reloading, so the page doesn't flash and keep its scroll; reload once at the end.
+(function poll() {
+  setTimeout(async () => {
+    try {
+      const r = await fetch("/listings/{{ listing.id }}/progress", {cache: "no-store"});
+      // Logged out (redirected to the login page) or gone: let a full reload show why.
+      if (r.redirected || !r.ok) { location.reload(); return; }
+      const s = await r.json();
+      if (!s.running) { location.reload(); return; }
+      document.getElementById("progress").textContent = s.progress;
+    } catch (e) { /* offline or asleep: try again */ }
+    poll();
+  }, 3000);
+})();
+</script>
 {% endif %}
 {% if listing.ai_error %}<div class="banner error">{{ listing.ai_error }}</div>{% endif %}
 {% if listing.status == "posted" and listing.olx %}
