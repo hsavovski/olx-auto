@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 from openai.types.chat import ChatCompletion
 
-from olx_auto import agent, drafting, listings, style, validation, vision
+from olx_auto import agent, drafting, listings, research, style, validation, vision
 from olx_auto.llm import LLM, LLMError, Reply, parse_json
 from tests.conftest import jpeg_bytes
 
@@ -19,6 +19,9 @@ STROLLER_ATTRS = [
 ]
 OBSERVATIONS = {"item_type": "baby stroller", "brand": "Chicco", "model": None,
                 "condition": "used", "defects": ["scuff on the frame, photo 2"]}
+RESEARCH = {"identified_as": "Chicco Liteway 3", "confidence": "high",
+            "specs": ["тегло 7.3 кг", "сгъване с една ръка"], "features": [], "variants_note": None,
+            "new_price": "199 EUR", "release_year": "2019"}
 GOOD_DRAFT = {
     "title": "Детска количка Chicco, сгъваема",
     "description": "Използвана детска количка Chicco. Има леко протриване на рамката, иначе е в добро "
@@ -62,6 +65,12 @@ _ids = itertools.count(1)
 def text_reply(text, cost=0.001, model="vision-model"):
     return Reply({"role": "assistant", "content": text}, model,
                  {"prompt_tokens": 100, "completion_tokens": 50, "cost": cost})
+
+
+def research_reply(facts=RESEARCH, cost=0.002):
+    return Reply({"role": "assistant", "content": json.dumps(facts, ensure_ascii=False)}, "research-model",
+                 {"prompt_tokens": 2000, "completion_tokens": 150, "cost": cost},
+                 [{"url": "https://example.com/liteway", "title": "Liteway"}] * 2)
 
 
 def tool_reply(*calls, cost=0.01):
@@ -132,6 +141,84 @@ def test_observe_sends_photos_and_note(tmp_path):
     assert len(images) == 2
     assert images[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
     assert "Chicco, 2 години" in parts[-1]["text"]
+
+
+# ---- research ---------------------------------------------------------------
+
+def test_llm_chat_merges_extra_body_and_reads_citations(monkeypatch):
+    completion = ChatCompletion.model_validate({
+        "id": "gen-2", "object": "chat.completion", "created": 0, "model": "google/x",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {
+            "role": "assistant", "content": "{}", "annotations": [{
+                "type": "url_citation", "url_citation": {"url": "https://example.com/a", "title": "A",
+                                                         "start_index": 0, "end_index": 1}}]}}],
+    })
+    llm = LLM("test-key")
+    sent = {}
+    monkeypatch.setattr(llm.client.chat.completions, "create",
+                        lambda **kw: sent.update(kw) or completion)
+    reply = llm.chat("google/x", [], extra_body={"plugins": [{"id": "web"}]})
+    assert sent["extra_body"] == {"usage": {"include": True}, "plugins": [{"id": "web"}]}
+    assert reply.citations == [{"url": "https://example.com/a", "title": "A"}]
+
+
+def test_research_searches_the_web_and_keeps_web_links_once():
+    reply = research_reply()
+    reply.citations.append({"url": "javascript:alert(1)", "title": "x"})
+    llm = FakeLLM(reply)
+    facts, _ = research.research(llm, "research-model", OBSERVATIONS, "Chicco",
+                                 [{"question": "Модел?", "answer": "Liteway 3"}], ["по-евтино"])
+    assert facts == {**RESEARCH, "sources": [{"url": "https://example.com/liteway", "title": "Liteway"}]}
+    request = llm.requests[0]
+    assert request["extra_body"] == {"plugins": [research.WEB_PLUGIN]}
+    assert request["response_format"] == {"type": "json_object"}
+    prompt = request["messages"][1]["content"]
+    assert '"brand": "Chicco"' in prompt and "Liteway 3" in prompt and "по-евтино" in prompt
+
+
+def test_research_reruns_only_when_the_seller_says_more(ai_settings, user):
+    listing = listings.create(user, "", [jpeg_bytes()])
+    listing.update(observations=OBSERVATIONS)
+    listings.save(user, listing)
+    llm = FakeLLM(research_reply(), tool_reply(("submit_draft", GOOD_DRAFT)))
+    drafting.generate(ai_settings, user, listing["id"], llm=llm, catalog=FakeCatalog())
+
+    llm = FakeLLM(tool_reply(("submit_draft", GOOD_DRAFT)))  # nothing new: no research call
+    drafting.generate(ai_settings, user, listing["id"], llm=llm, catalog=FakeCatalog())
+    assert [r["model"] for r in llm.requests] == ["agent-model"]
+    assert "тегло 7.3 кг" in llm.requests[0]["messages"][1]["content"]  # earlier facts reused
+
+    listing = listings.load(user, listing["id"])
+    listings.add_message(listing, "Всъщност е Liteway 4")
+    listings.save(user, listing)
+    llm = FakeLLM(research_reply({**RESEARCH, "identified_as": "Chicco Liteway 4"}, cost=0.003),
+                  tool_reply(("submit_draft", GOOD_DRAFT)), learn_reply(changed=False))
+    out = drafting.generate(ai_settings, user, listing["id"], llm=llm, catalog=FakeCatalog())
+    assert "Liteway 4" in llm.requests[0]["messages"][1]["content"]
+    assert out["research"]["identified_as"] == "Chicco Liteway 4"
+    assert out["research_seen"] == {"messages": 1, "answers": 0}
+    assert out["cost"]["research"] == pytest.approx(0.005)
+
+
+def test_failed_research_is_traced_and_drafting_goes_on(ai_settings, user):
+    listing = listings.create(user, "", [jpeg_bytes()])
+    listing.update(observations=OBSERVATIONS)
+    listings.save(user, listing)
+
+    class NoWeb(FakeLLM):
+        def chat(self, model, messages, **kwargs):
+            if model == "research-model":
+                raise LLMError("research-model: 503")
+            return super().chat(model, messages, **kwargs)
+
+    llm = NoWeb(tool_reply(("submit_draft", GOOD_DRAFT)))
+    out = drafting.generate(ai_settings, user, listing["id"], llm=llm, catalog=FakeCatalog())
+    assert out["draft"] == GOOD_DRAFT and out["ai_error"] is None
+    assert out["research"] is None and out["research_seen"] is None  # tried again next run
+    trace = json.loads(listings.trace_path(user, listing["id"]).read_text())
+    assert trace["runs"][0] == {"stage": "research", "model": "research-model", "at": trace["runs"][0]["at"],
+                                "error": "research-model: 503"}
+    assert "Product information" not in agent.build_context(agent.AgentInput(observations=OBSERVATIONS))
 
 
 # ---- validation -------------------------------------------------------------
@@ -283,7 +370,7 @@ def test_agent_writes_questions_and_reasoning_in_bulgarian():
 @pytest.fixture
 def ai_settings(settings):
     return replace(settings, openrouter_api_key="test-key", vision_model="vision-model",
-                   agent_model="agent-model")
+                   research_model="research-model", agent_model="agent-model")
 
 
 def learn_reply(changed=True, guide=None, summary="Без „Продавам“ в началото на описанието."):
@@ -299,11 +386,12 @@ def test_generate_writes_draft_costs_and_trace(ai_settings, user):
     listing = listings.create(user, "Chicco", [jpeg_bytes(), jpeg_bytes()])
     llm = FakeLLM(
         text_reply(json.dumps(OBSERVATIONS), cost=0.003),
+        research_reply(),
         tool_reply(("ask_user", {"questions": ["На колко години е?"]}), ("submit_draft", GOOD_DRAFT)),
     )
     out = drafting.generate(ai_settings, user, listing["id"], llm=llm, catalog=FakeCatalog())
 
-    assert len(llm.requests) == 2  # no feedback yet, so no style learning call
+    assert len(llm.requests) == 3  # no feedback yet, so no style learning call
     saved = listings.load(user, listing["id"])
     assert saved == out
     assert saved["observations"] == OBSERVATIONS
@@ -311,11 +399,19 @@ def test_generate_writes_draft_costs_and_trace(ai_settings, user):
     assert saved["category"]["id"] == 185 and saved["category"]["attributes"] == STROLLER_ATTRS
     assert saved["questions"] == [{"id": 1, "question": "На колко години е?", "answer": None}]
     assert saved["progress"] is None and saved["ai_error"] is None
-    assert saved["cost"] == {"vision": pytest.approx(0.003), "agent": pytest.approx(0.01), "style": 0.0}
+    assert saved["research"] == {**RESEARCH, "sources": [{"url": "https://example.com/liteway",
+                                                           "title": "Liteway"}]}
+    assert saved["research_seen"] == {"messages": 0, "answers": 0}
+    assert saved["cost"] == {"vision": pytest.approx(0.003), "research": pytest.approx(0.002),
+                             "agent": pytest.approx(0.01), "style": 0.0}
     trace = json.loads(listings.trace_path(user, listing["id"]).read_text())
-    assert [r["stage"] for r in trace["runs"]] == ["vision", "agent"]
+    assert [r["stage"] for r in trace["runs"]] == ["vision", "research", "agent"]
     assert "base64" not in json.dumps(trace)
-    assert "+359" not in json.dumps(llm.requests[1]["messages"])  # contact stays out of the prompt
+    assert llm.requests[1]["model"] == "research-model"
+    assert "Chicco" in llm.requests[1]["messages"][1]["content"]  # researches what vision saw
+    context = llm.requests[2]["messages"][1]["content"]
+    assert "тегло 7.3 кг" in context and "example.com" not in context  # facts, no links
+    assert "+359" not in json.dumps(llm.requests[2]["messages"])  # contact stays out of the prompt
 
 
 def test_refinement_skips_vision_keeps_answers_and_learns_style(ai_settings, user):
@@ -326,14 +422,16 @@ def test_refinement_skips_vision_keeps_answers_and_learns_style(ai_settings, use
     listings.add_message(listing, "по-евтино и без „Продавам“ в началото")
     listings.save(user, listing)
     old_guide = user.style_guide_file.read_text()
-    llm = FakeLLM(tool_reply(("ask_user", {"questions": ["Цвят?"]}),
+    llm = FakeLLM(research_reply(),
+                  tool_reply(("ask_user", {"questions": ["Цвят?"]}),
                              ("submit_draft", {**GOOD_DRAFT, "price": 55})),
                   learn_reply())
 
     out = drafting.generate(ai_settings, user, listing["id"], llm=llm, catalog=FakeCatalog())
 
-    assert [r["model"] for r in llm.requests] == ["agent-model", "agent-model"]
-    assert "по-евтино" in llm.requests[0]["messages"][1]["content"]
+    assert [r["model"] for r in llm.requests] == ["research-model", "agent-model", "agent-model"]
+    assert "2 години" in llm.requests[0]["messages"][1]["content"]  # research sees answers too
+    assert "по-евтино" in llm.requests[1]["messages"][1]["content"]
     assert out["draft"]["price"] == 55
     assert out["questions"] == [{"id": 1, "question": "How old?", "answer": "2 години"},
                                 {"id": 3, "question": "Цвят?", "answer": None}]
@@ -342,7 +440,7 @@ def test_refinement_skips_vision_keeps_answers_and_learns_style(ai_settings, use
     assert out["learned"] == {"messages": 1, "edits": 0}
     assert out["progress"] is None and out["ai_error"] is None
     # the learner saw the message and the complete listing
-    learn_input = llm.requests[1]["messages"][1]["content"]
+    learn_input = llm.requests[2]["messages"][1]["content"]
     assert "по-евтино" in learn_input and GOOD_DRAFT["description"] in learn_input
     assert "Не започвай описанието с „Продавам“" in user.style_guide_file.read_text()
     [entry] = style.log(user)
@@ -376,7 +474,7 @@ def test_truncated_guide_is_rejected_and_draft_kept(ai_settings, user):
     listings.add_message(listing, "по-кратко")
     listings.save(user, listing)
     guide = user.style_guide_file.read_text()
-    llm = FakeLLM(tool_reply(("submit_draft", GOOD_DRAFT)), learn_reply(guide="# Кратко"))
+    llm = FakeLLM(research_reply(), tool_reply(("submit_draft", GOOD_DRAFT)), learn_reply(guide="# Кратко"))
 
     out = drafting.generate(ai_settings, user, listing["id"], llm=llm, catalog=FakeCatalog())
 

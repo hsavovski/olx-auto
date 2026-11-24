@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from olx_auto import drafting, listings, style, users
 from olx_auto.web.app import create_app
 from tests.conftest import PASSWORD, jpeg_bytes
-from tests.test_ai import GOOD_DRAFT, STROLLER_ATTRS
+from tests.test_ai import GOOD_DRAFT, RESEARCH, STROLLER_ATTRS
 
 
 @pytest.fixture
@@ -48,6 +48,22 @@ def test_card_shows_editable_draft(client, drafted):
     assert 'value="60"' in page and GOOD_DRAFT["price_reasoning"] in page
     assert "На колко години е?" in page and "Add information or ask for changes" in page
     assert "🔒" not in page
+
+
+def test_card_shows_product_info_and_research_trace(client, user, drafted):
+    assert "Product info" not in client.get(f"/listings/{drafted['id']}").text
+    listing = listings.load(user, drafted["id"])
+    source = {"url": "https://example.com/liteway", "title": "Liteway"}
+    listing["research"] = {**RESEARCH, "sources": [source]}
+    listing["cost"]["research"] = 0.02
+    listings.save(user, listing)
+    listings.trace_path(user, drafted["id"]).write_text(
+        '{"runs": [{"stage": "research", "model": "m", "at": "t", "error": "m: 503"}]}')
+    page = client.get(f"/listings/{drafted['id']}").text
+    assert "Chicco Liteway 3 · high confidence" in page and "тегло 7.3 кг" in page
+    assert "New: 199 EUR · Released 2019" in page
+    assert '<a href="https://example.com/liteway" target="_blank" rel="noopener noreferrer">' in page
+    assert "research $0.02" in page and "m: 503" in page
 
 
 def test_edit_locks_fields_and_learns_from_text(client, user, drafted, started):

@@ -14,13 +14,14 @@ src/olx_auto/
   photos.py      Upload processing: decode/HEIC → upright, resized, metadata-free JPEG
   llm.py         OpenRouter chat via the openai SDK; Reply carries tokens + cost (USD)
   vision.py      Stage 1: photos + note → observations JSON; follow-up questions on the photos
+  research.py    Stage 1b: observations + seller's words → product facts from the web (OpenRouter web plugin)
   agent.py       Stage 2: hand-written tool loop → draft, questions; guardrails, locks
   validation.py  Draft checks (spec §8): content rules, lengths, attributes; submit readiness
   adverts.py     Listing + profile → OLX `POST /adverts` payload
   comparables.py OLX comparables: public olx.bg search page → asking prices, median (stdlib only)
   s3.py          PhotoStore: put a photo + presigned GET URL, delete (boto3, SigV4, regional endpoint)
   submitting.py  Submit: S3 → create advert → S3 cleanup → posted/failed; OLX status refresh; remove
-  drafting.py    Listing-level orchestration: vision once, agent run, style learning, progress/cost/trace
+  drafting.py    Listing-level orchestration: vision once, research, agent run, style learning, progress/cost/trace
   style.py       Style guide: read/write with backups + change log, revert, the learner LLM call
   cli.py         `olx-auto` command (serve, add-user, set-password, login, check, draft, remove-advert)
   web/app.py     FastAPI app factory: auth, listings + card (edit/lock/refine/compare), profile, style guide, Connect OLX
@@ -50,7 +51,7 @@ data/
     listings/<id>/           id = YYYYMMDD-HHMMSS-xxxx (UTC + 4 hex)
       listing.json
       photos/01.jpg, 02.jpg, ...
-      trace.json             {"runs": [vision run, agent run, ...]}, appended per run
+      trace.json             {"runs": [vision run, research run, agent run, ...]}, appended per run
 ```
 
 `listing.json` shape:
@@ -59,6 +60,10 @@ data/
 {"id", "created_at", "updated_at", "status": "draft|submitting|posted|failed",
  "note", "photos": ["01.jpg"],
  "observations": {...} | null,        vision output, computed once per listing
+ "research": null | {"identified_as", "confidence": "high|medium|low", "specs": [...], "features": [...],
+                     "variants_note", "new_price", "release_year", "sources": [{"url", "title"}]},
+                                      product facts from the web, the last successful lookup
+ "research_seen": null | {"messages": n, "answers": n},  what the last lookup saw; null = never succeeded
  "category": {"id", "name", "photos_limit", "attributes": [OLX attribute defs]} | null,
  "draft": {"title", "description", "category_id", "attributes": {"<code>": "<value code>" | [...]},
            "price", "negotiable", "price_estimate": {"low", "high"}, "price_reasoning"},
@@ -75,7 +80,7 @@ data/
                             "business", "city", "created"}], "at"},  last search of the last Compare run
  "progress": null | "Choosing category…",  set while a run is going
  "ai_error": null | "...", "agent_stopped": "submitted|max_iterations|max_cost",
- "cost": {"vision": 0.0, "agent": 0.0, "style": 0.0},
+ "cost": {"vision": 0.0, "research": 0.0, "agent": 0.0, "style": 0.0},
  "olx": null | {"id", "url", "status": OLX advert status, "images": [OLX CDN urls],
                 "posted_at", "checked_at"},   set by a successful submit
  "error": null | {"message", "fields": [{"field": card field, "olx_field", "title", "detail"}]}}
@@ -107,17 +112,18 @@ Route handlers reach data only through the `User` they receive from `CurrentUser
 
 The handlers are plain `def` functions, so FastAPI runs them in its threadpool and image processing doesn't block the event loop.
 
-### Drafting (vision + agent)
+### Drafting (vision + research + agent)
 After a successful upload, `POST /listings` adds `drafting.generate` as a FastAPI background task (only when `OPENROUTER_API_KEY` is set). `olx-auto draft <user> <id> [-m "message"] [--fresh]` runs the same thing in the foreground. `generate`:
 1. **Vision** (skipped if `observations` already exist): `vision.observe` sends every photo as a base64 data URL plus the note, with `response_format: json_object`, and stores the observations.
-2. **Agent**: `agent.run_agent` gets the observations, note, profile (without `contact`), style guide, current draft, locked fields, answered questions and all of the listing's messages. Tools: `look_at_photos` (a `vision.ask` call, costed as vision), `suggest_category`, `get_category_attributes` (rejects non-leaf and `photos_limit == 0` categories), `search_olx_comparables` (only when comparing, see below), `ask_user`, `submit_draft`.
-3. `submit_draft` runs `validation.check_draft` against the category's attributes. Problems go back to the model as the tool result; a clean draft ends the run.
-4. Guardrails: at `AGENT_MAX_COST` the run stops; on the last of `AGENT_MAX_ITERATIONS` turns, `tool_choice` forces `submit_draft`. The last submitted draft is kept even if it still has problems; with none, the previous draft stays.
-5. Locked fields are put back by code after the run, whatever the model wrote.
-6. Answered questions are kept; unanswered ones are replaced by this run's questions. `draft`, `ai_draft` and `category` (with attribute definitions, for the card) are saved.
-7. Style learning runs on any new feedback (below). Its failure is reported in `ai_error`; the draft stays.
+2. **Research** (skipped if `research_seen` matches the current count of messages and answered questions): `research.research` makes one `RESEARCH_MODEL` call with `extra_body={"plugins": [web]}` and `response_format: json_object`. OpenRouter searches and adds the results to the prompt; its `url_citation` annotations become `sources` (http(s) only, deduplicated). On `LLMError` the error is traced, the previous facts (or none) are used and `research_seen` is left as it was, so the next run tries again.
+3. **Agent**: `agent.run_agent` gets the observations, the research facts (without `sources`), note, profile (without `contact`), style guide, current draft, locked fields, answered questions and all of the listing's messages. Tools: `look_at_photos` (a `vision.ask` call, costed as vision), `suggest_category`, `get_category_attributes` (rejects non-leaf and `photos_limit == 0` categories), `search_olx_comparables` (only when comparing, see below), `ask_user`, `submit_draft`.
+4. `submit_draft` runs `validation.check_draft` against the category's attributes. Problems go back to the model as the tool result; a clean draft ends the run.
+5. Guardrails: at `AGENT_MAX_COST` the run stops; on the last of `AGENT_MAX_ITERATIONS` turns, `tool_choice` forces `submit_draft`. The last submitted draft is kept even if it still has problems; with none, the previous draft stays.
+6. Locked fields are put back by code after the run, whatever the model wrote.
+7. Answered questions are kept; unanswered ones are replaced by this run's questions. `draft`, `ai_draft` and `category` (with attribute definitions, for the card) are saved.
+8. Style learning runs on any new feedback (below). Its failure is reported in `ai_error`; the draft stays.
 
-Each step updates `progress` in `listing.json` (reloading the file before each write); the listing page auto-refreshes while it's set. Costs come from OpenRouter's `usage.cost` and are added per stage. Errors (`LLMError`, `OlxError`, …) end up in `ai_error`. Every run is appended to `trace.json`: the vision observations and usage, plus the agent's full message list, per-call usage and stop reason. Images never go into the trace.
+Each step updates `progress` in `listing.json` (reloading the file before each write); the listing page auto-refreshes while it's set. Costs come from OpenRouter's `usage.cost` and are added per stage. Errors (`LLMError`, `OlxError`, …) end up in `ai_error`. Every run is appended to `trace.json`: the vision observations and usage, the research facts and usage (or its error), plus the agent's full message list, per-call usage and stop reason. Images never go into the trace.
 
 `agent.Catalog` is the category-data interface the tools use. `Olx` satisfies it with the client token; a disk cache of the category tree (spike-notes.md) can replace it.
 
@@ -139,7 +145,7 @@ Anything unexpected (HTTP error, no embedded JSON, a different shape) raises `Co
 - `POST /listings/{id}/compare`: `drafting.generate(..., compare=True)` in the background (needs a draft).
 - `POST /listings/{id}/refine`: `answer_<question id>` and `message` → answers saved, message appended to `messages` → `drafting.generate` in the background.
 - Background work is started through `_start`, which sets `progress` *before* the redirect, so the page the user lands on is already refreshing.
-- The trace panel (`SHOW_TRACE`) shows each run: vision observations, the agent's messages and tool calls (system prompt left out), and style learner results.
+- The trace panel (`SHOW_TRACE`) shows each run: vision observations, research facts or error, the agent's messages and tool calls (system prompt left out), and style learner results.
 
 ### Submit
 `POST /listings/{id}/submit` → `submitting.submit`, run inside the request (OLX answers in seconds, and the seller sees the result at once):

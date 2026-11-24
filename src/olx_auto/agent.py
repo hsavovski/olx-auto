@@ -39,8 +39,8 @@ MAX_SEARCHES = 3  # comparables searches per run: each one is a page load on olx
 SYSTEM_PROMPT = """\
 You write second-hand listings for olx.bg on behalf of a private seller in Bulgaria.
 
-You get observations from a vision model that looked at the seller's photos, the seller's note,
-their profile and their style guide. Work through the tools:
+You get observations from a vision model that looked at the seller's photos, product information
+found on the web, the seller's note, their profile and their style guide. Work through the tools:
 1. suggest_category with a short query (English or Bulgarian, e.g. "iPhone 13", "детска количка").
    Pick the best leaf category.
 2. get_category_attributes for it. Fill every required attribute, and optional ones you can tell.
@@ -55,6 +55,12 @@ their profile and their style guide. Work through the tools:
 The seller's answers and messages are facts and wishes that override the observations; when two
 messages disagree, the later one wins.
 
+The product information is about the product in general: use it for attributes, specs and a
+detailed description. Anything about this particular item (condition, defects, what's included,
+which variant it is) comes from the photos and the seller, and they win over the web. When its
+confidence is low or it lists variants the photos don't settle, don't state those specs: ask the
+seller or look at the photos. Write in your own words; never copy text or links from the web.
+
 The listing, your questions to the seller and `price_reasoning` are all in Bulgarian. Follow the
 style guide. Title: what the item is, brand, model and the
 key spec; no "ПРОДАВАМ", no exclamation marks. Description: honest, mention every defect.
@@ -64,7 +70,8 @@ except delivery attributes such as `delivery_paid_by`, which follow the profile.
 
 Price in EUR: estimate what this item sells for second-hand in Bulgaria, given its condition, and
 suggest a price that sells within a couple of weeks. These are asking prices, so things
-usually sell for somewhat less. Explain it briefly in `price_reasoning`; when there are
+usually sell for somewhat less. A new price from the product information is a ceiling, not a
+guide. Explain it briefly in `price_reasoning`; when there are
 comparable adverts from olx.bg, say what they're listed at.
 
 Fields listed as locked are fixed by the seller: keep them exactly as given."""
@@ -143,6 +150,7 @@ PROGRESS = {
 @dataclass
 class AgentInput:
     observations: dict
+    research: dict | None = None  # product facts from the web (research.py)
     note: str = ""
     profile: dict = field(default_factory=dict)
     style_guide: str = ""
@@ -287,6 +295,12 @@ def _compact_attribute(a: dict) -> dict:
 def build_context(inp: AgentInput) -> str:
     parts = [
         "## Observations (from the photos)\n" + json.dumps(inp.observations, ensure_ascii=False, indent=1),
+    ]
+    if inp.research:
+        facts = {k: v for k, v in inp.research.items() if k != "sources"}
+        parts.append("## Product information (web research)\n"
+                     + json.dumps(facts, ensure_ascii=False, indent=1))
+    parts += [
         "## Seller's note\n" + (inp.note or "(none)"),
         "## Profile\n" + json.dumps(inp.profile, ensure_ascii=False, indent=1),
         "## Style guide\n" + (inp.style_guide or "(none)"),

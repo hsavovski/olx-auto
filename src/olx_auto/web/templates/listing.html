@@ -147,6 +147,21 @@
   </fieldset>
 </form>
 
+{% set facts = listing.research %}
+{% if facts %}
+<details class="card research">
+  <summary>Product info from the web: {{ facts.identified_as or "not identified" }} · {{ facts.confidence or "?" }} confidence</summary>
+  {% if facts.specs %}<ul>{% for x in facts.specs %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+  {% if facts.features %}<ul>{% for x in facts.features %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+  {% if facts.variants_note %}<p class="muted">{{ facts.variants_note }}</p>{% endif %}
+  {% if facts.new_price or facts.release_year %}<p class="muted">
+    {%- if facts.new_price %}New: {{ facts.new_price }}{% endif %}
+    {%- if facts.new_price and facts.release_year %} · {% endif %}
+    {%- if facts.release_year %}Released {{ facts.release_year }}{% endif %}</p>{% endif %}
+  {% if facts.sources %}<p class="muted">Sources: {% for c in facts.sources %}<a href="{{ c.url }}" target="_blank" rel="noopener noreferrer">{{ c.title or c.url }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+</details>
+{% endif %}
+
 <div class="card">
   <h2>Contact &amp; location</h2>
   <p class="muted">From your <a href="/settings/profile">profile</a>: {{ profile.contact.name or "no name" }}
@@ -199,7 +214,7 @@
 
 <div class="costs">
   <strong>Cost {{ cost | usd }}</strong>
-  <span>vision {{ listing.cost.vision | usd }} · agent {{ listing.cost.agent | usd }} · style {{ listing.cost.style | usd }}</span>
+  <span>vision {{ listing.cost.vision | usd }} · research {{ listing.cost.research | usd }} · agent {{ listing.cost.agent | usd }} · style {{ listing.cost.style | usd }}</span>
 </div>
 
 {% if trace %}
@@ -209,6 +224,8 @@
   <h3>{{ run.stage }} · {{ run.model }} · {{ run.at }}{% if run.stopped %} · {{ run.stopped }}{% endif %}</h3>
   {% if run.stage == "vision" %}
   <pre>{{ run.observations | tojson(indent=1) }}</pre>
+  {% elif run.stage == "research" %}
+  <pre>{{ (run.research or run.error) | tojson(indent=1) }}</pre>
   {% elif run.stage == "style" %}
   <pre>{{ run.result | tojson(indent=1) }}</pre>
   {% else %}

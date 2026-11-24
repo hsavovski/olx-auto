@@ -11,7 +11,8 @@ flowchart LR
   phone["Your phone<br/>photos + short note"] -->|upload| clean["Clean the photos<br/>rotate, shrink, remove GPS"]
   clean --> disk[("data/ folder<br/>listing.json + JPEGs")]
   clean -. "starts in background" .-> vision["Stage 1: Vision AI<br/>describes what it sees"]
-  vision --> agent["Stage 2: Agent AI<br/>category, text, price"]
+  vision --> research["Stage 1b: Research AI<br/>looks the product up on the web"]
+  research --> agent["Stage 2: Agent AI<br/>category, text, price"]
   agent --> card["Listing card<br/>you review and edit"]
   card -->|"answers, extra info"| agent
   card -->|"your text edits"| style["Style learning<br/>updates your style guide"]
@@ -25,7 +26,7 @@ Three ideas make the design easy to follow:
 
 - **Everything is a file.** There is no database. Each listing is a folder with a `listing.json` file and its photos. You can open these files in any text editor.
 - **The AI never blocks you.** It always produces a best-guess draft. If it's unsure, it adds questions to the card, and answering them reruns the AI.
-- **Two AI stages, on purpose.** Photos are expensive to send to an AI. So a cheap "vision" model looks at them once and writes a text description. The smarter "agent" model works only from that text.
+- **Separate AI stages, on purpose.** Photos are expensive to send to an AI. So a cheap "vision" model looks at them once and writes a text description. Another cheap model then searches the web for that product (model, sizes, specs) and writes down the facts. The smarter "agent" model works only from that text.
 
 ## 2. The modules
 
@@ -35,9 +36,10 @@ Every Python file in `src/olx_auto/` and what it's responsible for. A "module" i
 |---|---|---|
 | Entry points | `web/app.py` | The website. Every URL (login, home, new listing, listing card, profile, style guide, Connect OLX) is a function here. Built with FastAPI; the HTML lives in `web/templates/`. |
 | | `cli.py` | The `olx-auto` terminal command: `serve`, `add-user`, `set-password`, `login`, `check`, `draft`, `remove-advert` (takes a test advert off OLX). |
-| Conductor | `drafting.py` | Runs one AI pass on a listing: vision (only the first time), then the agent, then style learning. Writes progress, costs and the trace to disk as it goes, so you can close your phone and come back. |
+| Conductor | `drafting.py` | Runs one AI pass on a listing: vision (only the first time), research (when there's something new to look up), then the agent, then style learning. Writes progress, costs and the trace to disk as it goes, so you can close your phone and come back. |
 | | `submitting.py` | Posts a listing to OLX: photos to S3, create the advert, delete the S3 copies, save `posted` or `failed` with OLX's reasons. Also refreshes a posted advert's OLX status and removes test adverts. |
 | AI | `vision.py` | Stage 1. Sends the photos to the vision model and gets back "observations": item type, brand, model, text on the item, condition, defects, accessories, open questions. |
+| | `research.py` | Stage 1b. One call to a small model with OpenRouter's web search turned on. It identifies the exact product and returns its facts (specs, features, variants, new price) with the pages it used. |
 | | `agent.py` | Stage 2. The hand-written tool loop. Gives the agent model five tools and lets it call them until it submits a draft that passes the checks. Holds the system prompt. |
 | | `style.py` | The Bulgarian style guide: reading, saving with backups, a change log, Undo, and the "learner" AI call that turns your feedback into general rules. |
 | | `llm.py` | The one place that talks to OpenRouter. Returns the model's reply plus token counts and cost in USD. |
@@ -69,6 +71,7 @@ flowchart TB
   subgraph ai["AI"]
     agent["agent.py"]
     vision["vision.py"]
+    research["research.py"]
     style["style.py"]
     llm["llm.py"]
   end
@@ -100,11 +103,12 @@ flowchart TB
   app --> drafting & submitting & listings & profiles & style & users & validation
   cli --> drafting & submitting & listings & users
   submitting --> adverts & validation & listings & profiles & s3 & olx
-  drafting --> agent & vision & style & listings & profiles
+  drafting --> agent & vision & research & style & listings & profiles
   agent --> vision & validation & llm
   drafting --> comparables
   comparables --> olxweb
   vision --> llm
+  research --> llm
   style --> llm
   style --> users
   listings --> photos & users
@@ -133,6 +137,7 @@ sequenceDiagram
   participant L as listings.py + photos.py
   participant D as drafting.py
   participant V as vision.py
+  participant R as research.py
   participant A as agent.py
   participant AI as OpenRouter
   participant OLX as OLX API
@@ -146,7 +151,10 @@ sequenceDiagram
   D->>V: observe(photos, note)
   V->>AI: photos as base64 + prompt
   AI-->>V: observations JSON
-  D->>A: run_agent(observations, profile, style guide, ...)
+  D->>R: research(observations, note, answers, messages)
+  R->>AI: observations + web search plugin
+  AI-->>R: product facts JSON + source links
+  D->>A: run_agent(observations, facts, profile, style guide, ...)
   loop until a clean draft or a limit
     A->>AI: conversation so far + tools
     AI-->>A: tool calls
@@ -162,8 +170,9 @@ sequenceDiagram
 1. **Upload is checked before anything is saved.** 1 to 20 photos. Every photo is processed first, so a broken file leaves nothing half-written on disk.
 2. **The AI runs in the background.** FastAPI's `BackgroundTasks` runs `drafting.generate` after the page has answered. You see a progress line like "Choosing category…".
 3. **Vision runs only once per listing.** Later refinements reuse the saved observations.
-4. **Errors never crash the run.** Any AI or OLX error ends up in the listing's `ai_error` field and is shown on the card.
-5. **Everything is logged.** Each run appends to `trace.json`: every message, tool call, token count and cost. Set `SHOW_TRACE=true` to see it on the card.
+4. **Research runs on every listing, but not on every run.** It runs again only when you've added answers or messages since the last lookup (you might have corrected the model). If the lookup fails, the agent carries on without it.
+5. **Errors never crash the run.** Any AI or OLX error ends up in the listing's `ai_error` field and is shown on the card.
+6. **Everything is logged.** Each run appends to `trace.json`: every message, tool call, token count and cost. Set `SHOW_TRACE=true` to see it on the card.
 
 ## 5. Inside the agent loop
 
@@ -171,7 +180,7 @@ The "agent" is a loop in `agent.py`: ask the model what to do, run the tool it p
 
 ```mermaid
 flowchart TD
-  start(["Start: observations, note, profile,<br/>style guide, current draft, locks,<br/>answers, your messages"]) --> cost{"Spent ≥ AGENT_MAX_COST?<br/>($0.50 by default)"}
+  start(["Start: observations, web facts, note, profile,<br/>style guide, current draft, locks,<br/>answers, your messages"]) --> cost{"Spent ≥ AGENT_MAX_COST?<br/>($0.50 by default)"}
   cost -->|yes| stopcost(["Stop: max_cost"])
   cost -->|no| last{"Last allowed turn?<br/>(15 by default)"}
   last -->|yes| force["Force the model<br/>to call submit_draft"]
@@ -212,7 +221,7 @@ flowchart LR
   card -->|"Compare prices on OLX"| compare["POST /compare"]
   compare --> rerun
   edit -->|"title, description<br/>or price changed"| learn["Style learning<br/>(background)"]
-  refine --> rerun["Agent runs again<br/>(vision is reused)"]
+  refine --> rerun["Agent runs again<br/>(vision is reused,<br/>research reruns if<br/>you said something new)"]
   rerun --> learn
   learn --> guide[("style_guide.md<br/>+ backup + log")]
   card -->|"Submit (no problems left)"| post["POST /submit<br/>S3 → OLX → posted or failed"]
@@ -285,6 +294,7 @@ The important fields in `listing.json`:
 | `status` | `draft`, `submitting`, `posted` or `failed`. |
 | `note`, `photos` | What you uploaded. |
 | `observations` | What the vision model saw. Computed once. |
+| `research`, `research_seen` | Product facts found on the web, with source links, and how many of your messages and answers the lookup had seen. |
 | `category` | The chosen OLX category with its attribute rules and photo limit. |
 | `draft` | The current listing: title, description, category, attributes, price, negotiable, price estimate and reasoning. |
 | `ai_draft` | The draft exactly as the AI last wrote it, before your edits. |
@@ -297,7 +307,7 @@ The important fields in `listing.json`:
 | `ai_error` | The last AI or OLX error from drafting, if any. |
 | `olx` | After a successful Submit: the advert's id, link, OLX status and OLX image links. |
 | `error` | Why the last Submit failed: a message and OLX's complaints per field. |
-| `cost` | USD spent on this listing, split into vision, agent and style. |
+| `cost` | USD spent on this listing, split into vision, research, agent and style. |
 
 **Safe writes.** Files are written to a temporary file and then renamed over the real one (`os.replace`). A rename is all-or-nothing, so a crash never leaves a half-written file. The OLX token file also re-reads itself under a lock before every save, so a rotated refresh token is never overwritten by an older copy.
 
@@ -306,7 +316,7 @@ The important fields in `listing.json`:
 | Service | Used for | Code |
 |---|---|---|
 | olx.bg search page | Prices of similar adverts (the partner API can't search other people's adverts). | `comparables.py` |
-| OpenRouter | One account that reaches many AI models. Defaults are in `config.py` (`VISION_MODEL`, `AGENT_MODEL`). | `llm.py` |
+| OpenRouter | One account that reaches many AI models. Defaults are in `config.py` (`VISION_MODEL`, `RESEARCH_MODEL`, `AGENT_MODEL`). Research uses its web search plugin. | `llm.py` |
 | OLX partner API | Categories, attributes, locations, the connected account, and creating adverts. No sandbox: a real POST publishes a real ad. | `olx.py` |
 | AWS S3 | Temporary home for photos during Submit. OLX copies them, then they're deleted. | `s3.py`, `infra/s3-setup.sh` |
 | Tailscale | Lets the phone reach the app on the Mac over HTTPS without exposing it to the internet. | outside the code |
@@ -356,5 +366,6 @@ uv run ruff check . && uv run pytest -q          # the "done" check from CLAUDE.
 
 - **Token lock is per process.** The CLI and the web server renewing the OLX token at the same instant could still collide.
 - **Deleting a photo doesn't redo vision.** Observations may still mention a deleted photo by number.
+- **Web facts can be wrong.** The research model may pick the wrong variant or a bad source. It reports a confidence, the agent shouldn't state low-confidence specs, and the card shows the facts with their sources so you can check them.
 - **Comparables can break without warning.** They come from olx.bg's web page, not an API. If OLX changes the page or blocks the requests, the comparing run carries on without them and the trace shows the error.
 - **Comparables are asking prices**, not sale prices, and a broad category mixes different items. The agent judges by title; whether that's good enough still needs real runs.

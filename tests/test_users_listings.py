@@ -66,7 +66,7 @@ def test_listing_json_is_utf8(user):
     listing = listings.create(user, "Фотоапарат", [jpeg_bytes()])
     raw = (user.listings_dir / listing["id"] / "listing.json").read_text()
     assert "Фотоапарат" in raw
-    assert json.loads(raw)["cost"] == {"vision": 0.0, "agent": 0.0, "style": 0.0}
+    assert json.loads(raw)["cost"] == {"vision": 0.0, "research": 0.0, "agent": 0.0, "style": 0.0}
 
 
 def test_old_listing_json_gets_new_fields(user):
@@ -77,7 +77,7 @@ def test_old_listing_json_gets_new_fields(user):
     path.write_text(json.dumps(old))
     loaded = listings.load(user, listing["id"])
     assert loaded["messages"] == [] and loaded["learned"] == {"messages": 0, "edits": 0}
-    assert loaded["cost"] == {"vision": 0.1, "agent": 0.2, "style": 0.0}
+    assert loaded["cost"] == {"vision": 0.1, "research": 0.0, "agent": 0.2, "style": 0.0}
 
 
 def test_edit_draft_locks_and_records_changes():

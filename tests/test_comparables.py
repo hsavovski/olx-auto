@@ -12,6 +12,7 @@ from tests.test_ai import (
     OBSERVATIONS,
     FakeCatalog,
     FakeLLM,
+    research_reply,
     run,
     text_reply,
     tool_reply,
@@ -157,7 +158,7 @@ def test_generate_keeps_comparables_on_the_listing(settings, user, client, draft
     from dataclasses import replace
     ai_settings = replace(settings, openrouter_api_key="test-key")
     listing = listings.create(user, "Chicco", [jpeg_bytes()])
-    llm = FakeLLM(text_reply(json.dumps(OBSERVATIONS)),
+    llm = FakeLLM(text_reply(json.dumps(OBSERVATIONS)), research_reply(),
                   tool_reply(("search_olx_comparables", {"query": "chicco", "category_id": 185}),
                              ("submit_draft", GOOD_DRAFT)))
     drafting.generate(ai_settings, user, listing["id"], llm=llm, catalog=FakeCatalog(), compare=True,
