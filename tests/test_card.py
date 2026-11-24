@@ -7,14 +7,15 @@ from fastapi.testclient import TestClient
 from olx_auto import drafting, listings, style, users
 from olx_auto.web.app import create_app
 from tests.conftest import PASSWORD, jpeg_bytes
-from tests.test_ai import GOOD_DRAFT, STROLLER_ATTRS
+from tests.test_ai import GOOD_DRAFT, RESEARCH, STROLLER_ATTRS
 
 
 @pytest.fixture
 def started(monkeypatch):
     """Background tasks that would call the LLM, recorded instead of run."""
     calls = []
-    monkeypatch.setattr(drafting, "generate", lambda s, u, i: calls.append(("generate", i)))
+    monkeypatch.setattr(drafting, "generate", lambda s, u, i, compare=False:
+                        calls.append(("compare" if compare else "generate", i)))
     monkeypatch.setattr(drafting, "try_learn_style", lambda s, u, i: calls.append(("learn", i)))
     return calls
 
@@ -47,6 +48,22 @@ def test_card_shows_editable_draft(client, drafted):
     assert 'value="60"' in page and GOOD_DRAFT["price_reasoning"] in page
     assert "На колко години е?" in page and "Add information or ask for changes" in page
     assert "🔒" not in page
+
+
+def test_card_shows_product_info_and_research_trace(client, user, drafted):
+    assert "Product info" not in client.get(f"/listings/{drafted['id']}").text
+    listing = listings.load(user, drafted["id"])
+    source = {"url": "https://example.com/liteway", "title": "Liteway"}
+    listing["research"] = {**RESEARCH, "sources": [source]}
+    listing["cost"]["research"] = 0.02
+    listings.save(user, listing)
+    listings.trace_path(user, drafted["id"]).write_text(
+        '{"runs": [{"stage": "research", "model": "m", "at": "t", "error": "m: 503"}]}')
+    page = client.get(f"/listings/{drafted['id']}").text
+    assert "Chicco Liteway 3 · high confidence" in page and "тегло 7.3 кг" in page
+    assert "New: 199 EUR · Released 2019" in page
+    assert '<a href="https://example.com/liteway" target="_blank" rel="noopener noreferrer">' in page
+    assert "research $0.02" in page and "m: 503" in page
 
 
 def test_edit_locks_fields_and_learns_from_text(client, user, drafted, started):
@@ -125,7 +142,7 @@ def test_running_listing_cannot_be_changed(client, user, drafted, started):
 def test_other_users_listing_is_404(client, settings, started):
     other = users.create_user(settings.data_dir, "other", PASSWORD)
     theirs = listings.create(other, "", [jpeg_bytes(), jpeg_bytes()])
-    for path in ("edit", "refine", "unlock/title", "photos/01.jpg/delete"):
+    for path in ("edit", "refine", "compare", "unlock/title", "photos/01.jpg/delete"):
         assert client.post(f"/listings/{theirs['id']}/{path}", data={"message": "x"}).status_code == 404
     listing = listings.load(other, theirs["id"])
     assert listing["messages"] == [] and listing["photos"] == ["01.jpg", "02.jpg"]

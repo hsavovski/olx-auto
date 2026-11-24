@@ -7,7 +7,7 @@
   <label for="{{ for_id }}">{{ label }}</label>
   {% if name in listing.locked %}
   <button class="btn link lock" form="unlock-{{ name }}" title="Edited by you: the agent keeps it. Tap to let the agent change it."
-          {% if running %}disabled{% endif %}>🔒 locked</button>
+          {% if frozen %}disabled{% endif %}>🔒 locked</button>
   {% endif %}
 </div>
 {%- endmacro %}
@@ -24,7 +24,7 @@
       {% if listing.photos | length > 1 %}
       <form method="post" action="/listings/{{ listing.id }}/photos/{{ p }}/delete"
             onsubmit="return confirm('Delete this photo?')">
-        <button class="btn link delete" title="Delete this photo" {% if running %}disabled{% endif %}>Delete</button>
+        <button class="btn link delete" title="Delete this photo" {% if frozen %}disabled{% endif %}>Delete</button>
       </form>
       {% endif %}
     </div>
@@ -37,7 +37,23 @@
 <div class="banner info"><span class="spinner"></span><div><strong>{{ listing.progress }}</strong><br><span class="muted">You can close this page; the draft keeps going.</span></div></div>
 {% endif %}
 {% if listing.ai_error %}<div class="banner error">{{ listing.ai_error }}</div>{% endif %}
+{% if listing.status == "posted" and listing.olx %}
+<div class="banner info"><div><strong>On OLX: {{ olx_states.get(listing.olx.status, listing.olx.status) }}</strong>
+  {%- if listing.olx.url %} · <a href="{{ listing.olx.url }}" target="_blank" rel="noopener">open the advert</a>{% endif %}
+  {% if listing.olx.status == "limited" %}<br><span class="muted">The free adverts in this category are used up: pay for it in the OLX app.</span>{% endif %}
+</div></div>
+{% endif %}
+{% if listing.status == "failed" and listing.error %}
+<div class="banner error"><div><strong>{{ listing.error.message }}</strong>
+  {% if listing.error.fields %}<ul class="problems">{% for f in listing.error.fields %}<li>{{ f.field }}: {{ f.title or f.detail }}</li>{% endfor %}</ul>{% endif %}
+  <span class="muted">Fix it, then submit again.</span>
+</div></div>
+{% endif %}
+{% if interrupted %}
+<div class="banner error">A submit was cut off. Check your adverts on OLX before submitting again, so it isn't posted twice.</div>
+{% endif %}
 
+<form id="compare" method="post" action="/listings/{{ listing.id }}/compare"></form>
 {% for f in listing.locked %}
 <form id="unlock-{{ f }}" method="post" action="/listings/{{ listing.id }}/unlock/{{ f }}"></form>
 {% endfor %}
@@ -51,7 +67,7 @@
 {% endif %}
 
 <form class="card" method="post" action="/listings/{{ listing.id }}/edit">
-  <fieldset {% if running %}disabled{% endif %}>
+  <fieldset {% if frozen %}disabled{% endif %}>
   {{ field_label("title", "Title", "title") }}
   <input type="text" id="title" name="title" value="{{ draft.title }}" maxlength="150">
 
@@ -102,12 +118,49 @@
     {{ draft.price_reasoning or "" }}
   </div>
   {% endif %}
+  {% set comp = listing.comparables %}
+  {% if comp and comp.summary.n %}
+  <div class="estimate comparables">
+    On OLX now: median <strong>€{{ comp.summary.median }}</strong>, middle half €{{ comp.summary.low }}–{{ comp.summary.high }}
+    ({{ comp.summary.n }} adverts for "{{ comp.query }}", asking prices).
+    <a href="{{ comp.url }}" target="_blank" rel="noopener">See the search</a>
+    <details><summary>Adverts</summary>
+      <ul>{% for i in comp["items"][:15] if i.price %}
+        <li>€{{ i.price }} · {% if i.url %}<a href="{{ i.url }}" target="_blank" rel="noopener">{{ i.title }}</a>{% else %}{{ i.title }}{% endif %}
+          <span class="muted">{{ i.created }}{% if i.promoted %} · promoted{% endif %}</span></li>
+      {% endfor %}</ul>
+    </details>
+  </div>
+  {% elif comp %}
+  <div class="estimate comparables">No adverts on OLX for "{{ comp.query }}". <a href="{{ comp.url }}" target="_blank" rel="noopener">See the search</a></div>
+  {% endif %}
+  {% if ai_enabled %}
+  <div class="actions"><button class="btn secondary" form="compare"
+    title="The agent searches olx.bg for similar adverts and reprices (unless the price is locked)">
+    Compare prices on OLX</button>
+    {% if comp %}<span class="muted">Last compared {{ comp.at[:10] }}</span>{% endif %}</div>
+  {% endif %}
 
   <div class="actions"><button class="btn" type="submit">Save changes</button></div>
   <p class="hint">Fields you change get locked. Changes to the text also teach your
     <a href="/settings/style">style guide</a>.</p>
   </fieldset>
 </form>
+
+{% set facts = listing.research %}
+{% if facts %}
+<details class="card research">
+  <summary>Product info from the web: {{ facts.identified_as or "not identified" }} · {{ facts.confidence or "?" }} confidence</summary>
+  {% if facts.specs %}<ul>{% for x in facts.specs %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+  {% if facts.features %}<ul>{% for x in facts.features %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+  {% if facts.variants_note %}<p class="muted">{{ facts.variants_note }}</p>{% endif %}
+  {% if facts.new_price or facts.release_year %}<p class="muted">
+    {%- if facts.new_price %}New: {{ facts.new_price }}{% endif %}
+    {%- if facts.new_price and facts.release_year %} · {% endif %}
+    {%- if facts.release_year %}Released {{ facts.release_year }}{% endif %}</p>{% endif %}
+  {% if facts.sources %}<p class="muted">Sources: {% for c in facts.sources %}<a href="{{ c.url }}" target="_blank" rel="noopener noreferrer">{{ c.title or c.url }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+</details>
+{% endif %}
 
 <div class="card">
   <h2>Contact &amp; location</h2>
@@ -117,6 +170,15 @@
       {%- if profile.location.district_name %}, {{ profile.location.district_name }}{% endif %}
     {%- else %} · <span class="error">no location set</span>{% endif %}</p>
 </div>
+
+{% if can_submit %}
+<form class="card" method="post" action="/listings/{{ listing.id }}/submit"
+      onsubmit="return confirm('Post this listing on OLX now?')">
+  <h2>Submit to OLX</h2>
+  <p class="hint">Posts the advert right away; it goes live once OLX has moderated it.</p>
+  <div class="actions"><button class="btn" type="submit" {% if problems or running %}disabled{% endif %}>Submit to OLX</button></div>
+</form>
+{% endif %}
 {% elif not running and not listing.ai_error %}
 <div class="card empty"><p class="muted">
   {% if ai_enabled %}The agent hasn't drafted this listing yet.{% else %}Drafting is off: set OPENROUTER_API_KEY in .env.{% endif %}
@@ -125,7 +187,7 @@
 
 {% if ai_enabled %}
 <form class="card" method="post" action="/listings/{{ listing.id }}/refine">
-  <fieldset {% if running %}disabled{% endif %}>
+  <fieldset {% if frozen %}disabled{% endif %}>
   {% if listing.questions %}
   <h2>Questions from the agent</h2>
   {% for q in listing.questions %}
@@ -152,7 +214,7 @@
 
 <div class="costs">
   <strong>Cost {{ cost | usd }}</strong>
-  <span>vision {{ listing.cost.vision | usd }} · agent {{ listing.cost.agent | usd }} · style {{ listing.cost.style | usd }}</span>
+  <span>vision {{ listing.cost.vision | usd }} · research {{ listing.cost.research | usd }} · agent {{ listing.cost.agent | usd }} · style {{ listing.cost.style | usd }}</span>
 </div>
 
 {% if trace %}
@@ -162,6 +224,8 @@
   <h3>{{ run.stage }} · {{ run.model }} · {{ run.at }}{% if run.stopped %} · {{ run.stopped }}{% endif %}</h3>
   {% if run.stage == "vision" %}
   <pre>{{ run.observations | tojson(indent=1) }}</pre>
+  {% elif run.stage == "research" %}
+  <pre>{{ (run.research or run.error) | tojson(indent=1) }}</pre>
   {% elif run.stage == "style" %}
   <pre>{{ run.result | tojson(indent=1) }}</pre>
   {% else %}

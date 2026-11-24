@@ -41,15 +41,16 @@ Secondary goal: learn how to build AI tools. The agent is deliberately hand-writ
    - **questions** from the agent (in Bulgarian) for things it could not tell (condition, accessories, required attributes). Answering one refines the draft;
    - an **additional information** box for facts and change requests ("120 x 45 cm, no box; make it cheaper"). Every message is kept on the listing and given to every later run of it, so information is never lost between refinements;
    - fields edited by hand are **locked** (lock icon, tap to unlock), and the agent treats them as fixed;
-   - **cost** of this listing so far (vision + agent + style learning, including all refinements);
+   - **product info** found on the web (what the item was identified as, confidence, specs, source links), collapsible;
+   - **cost** of this listing so far (vision + research + agent + style learning, including all refinements);
    - optional collapsible **trace panel** ("how the agent got here"), shown when `SHOW_TRACE=true`.
 5. **Submit**, enabled only when validation passes (§8) → images uploaded to S3 → advert created on OLX → S3 objects deleted → status `posted` with link. The card *is* the approval step: there is no staging on OLX.
-   - A created advert isn't live yet. Its OLX status is shown next to `posted` and refreshed from the API: `disabled`/`new` → **pending moderation**; `limited` → **needs payment** (the category's free quota is used up; the user pays in the OLX app); `active` → **live**; `moderated`/`blocked` → **rejected by OLX**.
+   - A created advert isn't live yet. Its OLX status is shown instead of `posted`, refreshed from the API when the home page or the card is opened (at most once a minute per advert): `disabled`/`new` → **pending moderation**; `limited` → **needs payment** (the category's free quota is used up; the user pays in the OLX app); `active` → **live**; `moderated`/`blocked` → **rejected by OLX**.
 6. On OLX rejection → status `failed`, error shown and mapped to the relevant field when possible; the user fixes it and **resubmits**. OLX returns `{field, title (BG), detail}` per error. Field paths are `title`, `description`, `category_id`, `contact.*`, `location.*`, `params.price[0]` (price) and `params.<attribute code>`.
 
 ## 5. AI architecture
 
-Hand-written **tool-use loop** ("level 2"), using the `openai` Python SDK pointed at **OpenRouter**. Two stages, each with a configurable model:
+Hand-written **tool-use loop** ("level 2"), using the `openai` Python SDK pointed at **OpenRouter**. Three stages, each with a configurable model:
 
 ### Stage 1: Vision (`VISION_MODEL`, cheap vision model)
 
@@ -57,9 +58,18 @@ One call: photos + user note → structured **observations** JSON: item type, br
 
 Reason for the split: in a tool loop the whole history is resent every turn, so including images there multiplies their cost. The agent works from text instead.
 
+### Stage 1b: Research (`RESEARCH_MODEL`, small cheap model)
+
+One call on **every** listing, with OpenRouter's web plugin: observations + note + the seller's answers and messages → product **facts** JSON: what it was identified as, confidence, specs, features, how variants differ, new price, release year, plus the source pages. It gives the agent the labels, models and sizes it needs for attributes and a detailed description.
+
+- A fixed step rather than an agent tool: it's always wanted, a small model is enough for it, and the facts reach the agent as text instead of search results resent on every turn.
+- Reruns on a refinement only when the seller has added messages or answers since (they may have corrected the model); otherwise the saved facts are reused.
+- A failed lookup is traced and drafting goes on without it; it's tried again on the next run.
+- The facts are about the product in general. Anything about the seller's item (condition, defects, contents, which variant) comes from the photos and the seller, which win. Low-confidence specs aren't stated; the agent asks instead. Text and links from the web are never copied into the listing.
+
 ### Stage 2: Agent (`AGENT_MODEL`, stronger reasoning model)
 
-Input: observations, user note, the user's profile and style guide (Bulgarian), OLX content rules, any locked fields and answered questions.
+Input: observations, research facts (without the links), user note, the user's profile and style guide (Bulgarian), OLX content rules, any locked fields and answered questions.
 
 Tools:
 
@@ -75,7 +85,7 @@ Tools:
 Rules:
 - **Non-blocking questions**: always produce a best-guess draft; questions refine it later.
 - **Guardrails**: max iterations (default 15) and max cost per run (default $0.50), both configurable. On hitting a cap, the run stops and keeps the best draft so far.
-- **Refinement** (answers, additional information) reruns the agent stage with the current draft + locked fields + all messages. Vision is not rerun.
+- **Refinement** (answers, additional information) reruns the agent stage with the current draft + locked fields + all messages. Vision is not rerun; research is rerun only if the seller said something new.
 - Listing content (title, description, attributes) and everything the agent writes for the seller (questions, price reasoning, style guide change notes) is **Bulgarian**. The UI is English.
 
 ### Style learning
@@ -89,7 +99,7 @@ So the seller doesn't repeat the same feedback on every listing, the style guide
 ### Traces & cost
 
 - Every run writes `trace.json` next to the listing: each message, tool call/result, model, tokens, cost per stage. Always saved; the UI panel is controlled by `SHOW_TRACE`.
-- Cost is accumulated per listing (vision / agent split) and per user. This is used to compare models on price vs. quality.
+- Cost is accumulated per listing (vision / research / agent / style split) and per user. This is used to compare models on price vs. quality.
 
 ## 6. Context (per user)
 
@@ -99,7 +109,7 @@ So the seller doesn't repeat the same feedback on every listing, the style guide
 
 ## 7. Pricing
 
-Show **both** an AI estimate (from observations and general knowledge) and **OLX comparables** side by side, plus a suggested price. The partner API cannot search other users' adverts, so comparables come from **scraping the public olx.bg search** (first N results: title, price, URL). It lives in an isolated module because it is fragile. Both numbers are recorded in traces, and the comparables module is removed if the AI estimate proves good enough.
+Show **both** an AI estimate (from observations and general knowledge) and **OLX comparables** side by side, plus a suggested price. The partner API cannot search other users' adverts, so comparables come from **scraping the public olx.bg search** (first N results: title, price, URL). It lives in an isolated module because it is fragile. Both numbers are recorded in traces, and the comparables module is removed if the AI estimate proves good enough. Comparing is **on demand**: a "Compare prices on OLX" button on the card starts an agent run that may search; other runs price from the observations and the last comparison.
 
 Currency: **EUR** (Bulgaria adopted the euro on 2026-01-01; confirmed: `/currencies` has EUR as the default, BGN is still accepted).
 
@@ -153,7 +163,7 @@ Global config in `.env`: OLX `client_id`/`client_secret`, OpenRouter key, `VISIO
 
 The spike comes first, because its answers can change the design. After the skeleton (storage layout) exists, vision, comparables and UI work can proceed in parallel.
 
-Progress (2026-11-23): **steps 1–5 are done**; step 6 is next. One real drafting run on photos (test account) worked end to end.
+Progress (2026-11-23): **steps 1–6 are done**; step 7 (comparables) is built and waits for a real drafting run to judge it. One real drafting run on photos (test account) worked end to end.
 
 | Step | Status | Where |
 |---|---|---|
@@ -162,8 +172,8 @@ Progress (2026-11-23): **steps 1–5 are done**; step 6 is next. One real drafti
 | 3. Vision stage | ✅ done | `vision.py`, `llm.py` |
 | 4. Agent loop + tools | ✅ done (no comparables tool until step 7) | `agent.py`, `drafting.py`, `olx-auto draft` |
 | 5. Listing card UI | ✅ done, plus style learning (§5) | `web/templates/listing.html`, `style.py`, Style page |
-| 6. Validation + submit | validation done (`validation.submit_problems`), payload builder done (`adverts.py`); S3 upload, submit route, resubmit and status refresh not started (S3 bucket and IAM user exist) | |
-| 7. Comparables scraper | not started | |
+| 6. Validation + submit | ✅ done: first real post on `ico-test` went `active` in under 12 min | `validation.py`, `adverts.py`, `s3.py`, `submitting.py` |
+| 7. Comparables scraper | built and tested offline; checked by hand against live olx.bg | `comparables.py`, agent tool, "Compare prices on OLX" button |
 | 8. Polish | not started | |
 
 1. **Spike: OLX API.** Connect a second (test) OLX account to the existing app; post one real advert with S3 images; check the initial status, currency format, title/description limits, and which categories are open to the API on .bg; delete the S3 objects and check whether the images survive; deactivate → delete.
@@ -176,6 +186,7 @@ Progress (2026-11-23): **steps 1–5 are done**; step 6 is next. One real drafti
 6. **Validation + submit** (S3 upload, OLX create, failed/resubmit).
 7. **Comparables scraper.**
 8. **Polish**: launchd autostart, cost overview, model comparison.
+   *To do:* register `https://<mac>.<tailnet>.ts.net/olx/callback` as the redirect URI in the OLX developer app and set the same URL as `redirect_uri=` in `.env`, so Connect OLX lands back on the app instead of needing the paste-code fallback.
 
 ## 13. Future
 

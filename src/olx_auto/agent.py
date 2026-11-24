@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Protocol
 
 from . import validation, vision
+from .comparables import ComparablesError
 from .llm import LLM, Reply
 from .olx import OlxError
 
@@ -26,11 +27,20 @@ class Catalog(Protocol):
     def category_attributes(self, category_id: int) -> list[dict]: ...
 
 
+class Comparables(Protocol):
+    """Prices of similar adverts on olx.bg. `comparables.Search` satisfies it."""
+
+    def search(self, query: str, category_id: int | None = None, filters: dict | None = None) -> dict: ...
+
+
+MAX_SEARCHES = 3  # comparables searches per run: each one is a page load on olx.bg
+
+
 SYSTEM_PROMPT = """\
 You write second-hand listings for olx.bg on behalf of a private seller in Bulgaria.
 
-You get observations from a vision model that looked at the seller's photos, the seller's note,
-their profile and their style guide. Work through the tools:
+You get observations from a vision model that looked at the seller's photos, product information
+found on the web, the seller's note, their profile and their style guide. Work through the tools:
 1. suggest_category with a short query (English or Bulgarian, e.g. "iPhone 13", "детска количка").
    Pick the best leaf category.
 2. get_category_attributes for it. Fill every required attribute, and optional ones you can tell.
@@ -45,6 +55,12 @@ their profile and their style guide. Work through the tools:
 The seller's answers and messages are facts and wishes that override the observations; when two
 messages disagree, the later one wins.
 
+The product information is about the product in general: use it for attributes, specs and a
+detailed description. Anything about this particular item (condition, defects, what's included,
+which variant it is) comes from the photos and the seller, and they win over the web. When its
+confidence is low or it lists variants the photos don't settle, don't state those specs: ask the
+seller or look at the photos. Write in your own words; never copy text or links from the web.
+
 The listing, your questions to the seller and `price_reasoning` are all in Bulgarian. Follow the
 style guide. Title: what the item is, brand, model and the
 key spec; no "ПРОДАВАМ", no exclamation marks. Description: honest, mention every defect.
@@ -53,9 +69,22 @@ punctuation repeated 3+ times. Contact, location and delivery are added by the a
 except delivery attributes such as `delivery_paid_by`, which follow the profile.
 
 Price in EUR: estimate what this item sells for second-hand in Bulgaria, given its condition, and
-suggest a price that sells within a couple of weeks. Explain it briefly in `price_reasoning`.
+suggest a price that sells within a couple of weeks. These are asking prices, so things
+usually sell for somewhat less. A new price from the product information is a ceiling, not a
+guide. Explain it briefly in `price_reasoning`; when there are
+comparable adverts from olx.bg, say what they're listed at.
 
 Fields listed as locked are fixed by the seller: keep them exactly as given."""
+
+# Added to the prompt only when the seller pressed "Compare prices on OLX"
+COMPARE_PROMPT = """
+
+The seller asked to compare prices this run. Before submit_draft, use search_olx_comparables for
+what similar items are listed at on olx.bg right now: a short query (brand and model, the way
+sellers write it) in the chosen category, filtered by condition when you know it. At most 3
+searches. Judge each result by its title: leave out other models, parts, accessories, bundles and
+"търся" adverts, then price from the ones that really compare. If the search fails or finds
+nothing useful, price from your own knowledge."""
 
 TOOLS = [
     {"type": "function", "function": {
@@ -74,6 +103,16 @@ TOOLS = [
                        "plus the category's photo limit.",
         "parameters": {"type": "object", "properties": {"category_id": {"type": "integer"}},
                        "required": ["category_id"]}}},
+    {"type": "function", "function": {
+        "name": "search_olx_comparables",
+        "description": "Asking prices (EUR) of similar adverts on olx.bg now: one results page with "
+                       "title, price, condition, date, plus the median and middle half of all prices.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "A few words, e.g. \"chicco liteway\""},
+            "category_id": {"type": "integer", "description": "Leaf category to search in"},
+            "filters": {"type": "object", "description": "{attribute code: value code}, e.g. "
+                                                         "{\"state\": \"used\"}"},
+        }, "required": ["query"]}}},
     {"type": "function", "function": {
         "name": "ask_user",
         "description": "Add questions for the seller to the listing card. Non-blocking: answers arrive "
@@ -102,6 +141,7 @@ PROGRESS = {
     "look_at_photos": "Looking at the photos again…",
     "suggest_category": "Choosing category…",
     "get_category_attributes": "Reading category attributes…",
+    "search_olx_comparables": "Checking comparables…",
     "ask_user": "Noting questions…",
     "submit_draft": "Writing the listing…",
 }
@@ -110,6 +150,7 @@ PROGRESS = {
 @dataclass
 class AgentInput:
     observations: dict
+    research: dict | None = None  # product facts from the web (research.py)
     note: str = ""
     profile: dict = field(default_factory=dict)
     style_guide: str = ""
@@ -117,6 +158,7 @@ class AgentInput:
     locked: list[str] = field(default_factory=list)
     answered: list[dict] = field(default_factory=list)  # [{"question", "answer"}]
     messages: list[str] = field(default_factory=list)  # seller's additional info / requests, oldest first
+    comparables: dict | None = None  # the listing's last comparables search, from an earlier run
 
 
 @dataclass
@@ -125,6 +167,7 @@ class AgentResult:
     category: dict | None  # {id, name, photos_limit, attributes} of the draft's category, if looked up
     questions: list[str]
     problems: list[str]  # what check_draft still reports about `draft`
+    comparables: dict | None  # the last successful comparables search, for the card
     stopped: str  # submitted | max_iterations | max_cost
     cost_vision: float
     cost_agent: float
@@ -135,6 +178,7 @@ class AgentResult:
 class _Run:
     llm: LLM
     catalog: Catalog
+    comparables: Comparables | None
     photo_paths: list[Path]
     note: str
     vision_model: str
@@ -143,6 +187,8 @@ class _Run:
     calls: list[dict] = field(default_factory=list)
     categories: dict[int, dict] = field(default_factory=dict)  # looked-up leaves, with attributes
     questions: list[str] = field(default_factory=list)
+    searches: list[dict] = field(default_factory=list)  # successful comparables searches
+    search_count: int = 0
     draft: dict | None = None
     problems: list[str] = field(default_factory=list)
     accepted: bool = False
@@ -181,6 +227,17 @@ class _Run:
                              "photos_limit": category.get("photos_limit")},
                 "attributes": [_compact_attribute(a) for a in attributes]}
 
+    def search_olx_comparables(self, query: str, category_id: int | None = None,
+                               filters: dict | None = None):
+        if not self.comparables:
+            return {"error": "comparables are not available, price from your own knowledge"}
+        if self.search_count >= MAX_SEARCHES:
+            return {"error": f"at most {MAX_SEARCHES} searches per run, price from what you have"}
+        self.search_count += 1
+        result = self.comparables.search(query, category_id, filters if isinstance(filters, dict) else None)
+        self.searches.append(result)
+        return {"search_url": result["url"], "total_matches": result["total"], **_for_model(result)}
+
     def ask_user(self, questions: list[str]):
         self.questions += [q.strip() for q in questions if q.strip()]
         return {"ok": True, "note": "Questions added to the card. Continue with your best guesses."}
@@ -211,8 +268,14 @@ class _Run:
             return getattr(self, name)(**args)
         except TypeError as e:
             return {"error": f"bad arguments: {e}"}
-        except (OlxError, OSError) as e:
+        except (OlxError, OSError, ComparablesError) as e:
             return {"error": str(e)}
+
+
+def _for_model(search: dict) -> dict:
+    """A comparables search as the model sees it: no links, no seller details."""
+    return {**search["summary"], "adverts": [
+        {k: i[k] for k in ("title", "price", "condition", "negotiable", "created")} for i in search["items"]]}
 
 
 def _compact_attribute(a: dict) -> dict:
@@ -232,6 +295,12 @@ def _compact_attribute(a: dict) -> dict:
 def build_context(inp: AgentInput) -> str:
     parts = [
         "## Observations (from the photos)\n" + json.dumps(inp.observations, ensure_ascii=False, indent=1),
+    ]
+    if inp.research:
+        facts = {k: v for k, v in inp.research.items() if k != "sources"}
+        parts.append("## Product information (web research)\n"
+                     + json.dumps(facts, ensure_ascii=False, indent=1))
+    parts += [
         "## Seller's note\n" + (inp.note or "(none)"),
         "## Profile\n" + json.dumps(inp.profile, ensure_ascii=False, indent=1),
         "## Style guide\n" + (inp.style_guide or "(none)"),
@@ -247,14 +316,21 @@ def build_context(inp: AgentInput) -> str:
     if inp.messages:
         parts.append("## Seller's additional information and requests (oldest first)\n"
                      + "\n".join(f"- {m}" for m in inp.messages))
+    if inp.comparables:
+        c = inp.comparables
+        parts.append(f"## Comparable adverts on olx.bg (search \"{c['query']}\" on {c['at'][:10]})\n"
+                     + json.dumps(_for_model(c), ensure_ascii=False, indent=1))
     return "\n\n".join(parts)
 
 
 def run_agent(llm: LLM, model: str, inp: AgentInput, *, catalog: Catalog, photo_paths: list[Path],
-              vision_model: str, max_iterations: int = 15, max_cost: float = 0.50,
-              on_progress: Callable[[str], None] = lambda step: None) -> AgentResult:
-    run = _Run(llm, catalog, photo_paths, inp.note, vision_model)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT},
+              vision_model: str, comparables: Comparables | None = None, max_iterations: int = 15,
+              max_cost: float = 0.50, on_progress: Callable[[str], None] = lambda step: None) -> AgentResult:
+    run = _Run(llm, catalog, comparables, photo_paths, inp.note, vision_model)
+    # The comparables tool is offered only when the seller asked for a comparison
+    system = SYSTEM_PROMPT + (COMPARE_PROMPT if comparables else "")
+    tools = TOOLS if comparables else [t for t in TOOLS if t["function"]["name"] != "search_olx_comparables"]
+    messages = [{"role": "system", "content": system},
                 {"role": "user", "content": build_context(inp)}]
     stopped = "max_iterations"
     for i in range(max_iterations):
@@ -265,7 +341,7 @@ def run_agent(llm: LLM, model: str, inp: AgentInput, *, catalog: Catalog, photo_
         last = i == max_iterations - 1
         tool_choice = {"type": "function", "function": {"name": "submit_draft"}} if last else "auto"
         on_progress("Thinking…" if i else "Planning the listing…")
-        reply = llm.chat(model, messages, tools=TOOLS, tool_choice=tool_choice)
+        reply = llm.chat(model, messages, tools=tools, tool_choice=tool_choice)
         run.record("agent", reply)
         messages.append(reply.message)
         if not reply.tool_calls:
@@ -285,7 +361,8 @@ def run_agent(llm: LLM, model: str, inp: AgentInput, *, catalog: Catalog, photo_
     trace = {"stage": "agent", "model": model, "stopped": stopped, "calls": run.calls,
              "messages": messages,
              "cost": {"vision": run.cost_vision, "agent": run.cost_agent}}
-    return AgentResult(draft, category, run.questions, run.problems, stopped,
+    return AgentResult(draft, category, run.questions, run.problems,
+                       run.searches[-1] if run.searches else None, stopped,
                        run.cost_vision, run.cost_agent, trace)
 
 

@@ -40,6 +40,8 @@ def _defaults() -> dict:
         "note": "",
         "photos": [],
         "observations": None,
+        "research": None,  # product facts from the web (research.py), None until a run succeeds
+        "research_seen": None,  # {messages, answers} the last research run saw; None = never ran
         "category": None,  # {id, name, photos_limit, attributes} of the draft's category
         "draft": {},
         "ai_draft": {},  # the draft as the agent last wrote it, before hand edits
@@ -49,9 +51,10 @@ def _defaults() -> dict:
         "edits": [],  # hand edits: [{at, field, before, after}]
         "learned": {"messages": 0, "edits": 0},  # feedback already used for the style guide
         "problems": [],
+        "comparables": None,  # last OLX comparables search (comparables.Search.search result)
         "progress": None,
         "ai_error": None,
-        "cost": {"vision": 0.0, "agent": 0.0, "style": 0.0},
+        "cost": {"vision": 0.0, "research": 0.0, "agent": 0.0, "style": 0.0},
         "olx": None,
         "error": None,
     }

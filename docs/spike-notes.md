@@ -72,12 +72,24 @@ Ran `spikes/olx_image_spike.py`: two JPEGs uploaded to S3, posted with 7-day pre
 ### S3 setup
 `infra/s3-setup.sh` (idempotent) creates bucket `olx-auto-<account-id>` in `eu-central-1` with all public access blocked and a 30-day expiry, plus IAM user `olx-auto` with one inline policy: Put/Get/DeleteObject on the bucket's objects and ListBucket on the bucket. No groups, no managed policies, no console login. Verified with the app's key: bucket object operations work; ListBuckets, DeleteBucket, PutBucketPolicy, lifecycle changes, IAM and EC2 are denied, and a direct public object URL returns 403.
 
+### First real post through the app (2026-11-23)
+`ico-test`, category 623 (ski boots), 4 photos via S3, delivery set. Created 17:16, **`active` within 12 minutes** (it was seen `active` on the first card view at 17:28).
+- **Multi-value attributes work as `{code, values: [...]}`.** OLX echoes every attribute with both keys: `{code, value: null, values: ["207", "209"]}` for multi, `{code, value: "used", values: null}` for single.
+- All 4 images came through; `courier: true`, the district and `advertiser_type` were kept. OLX added the district's `latitude`/`longitude` to `location`. Contact holds `name` and `phone` (no email).
+- **Cleanup of an `active` advert:** `deactivate` is accepted, but a `DELETE` sent right after is refused with 400 "Невалидно състояние". Deactivation finishes a moment later (status `removed_by_user`); then `DELETE` works and `GET` returns 404. `submitting.remove` waits for the status to leave `active` first.
+
+### Public search (comparables, 2026-11-23)
+- `https://www.olx.bg/api/v1/offers/` (the site's JSON API) answers **403 from CloudFront** to plain HTTP clients, and robots.txt disallows `/api/` anyway.
+- The normal search page works (200, ~2 MB) and embeds everything as JSON in `window.__PRERENDERED_STATE__` (a JSON string to decode twice): `listing.listing.{totalElements, ads[]}` and `categories.list` (all 1243 categories with their URL `path`).
+- Each ad has `title`, `url`, `price.regularPrice{value, currencyCode, negotiable}` (all EUR in the samples), `params[]` with `normalizedValue` codes (`state: used`), `isPromoted`, `isBusiness`, `createdTime`, `location`, and the seller's `user` details (not kept).
+- **URL shape:** `/<category path>/q-<words-joined-by-dashes>/`, without a category `/ads/q-.../`. Attribute filters work as `?search[filter_enum_<code>][0]=<value code>`. `?search[category_id]=` gives 404. robots.txt disallows `/*?q=` but allows the path style.
+- A page has about 40 adverts plus promoted ones on top. Text search is loose: "rossignol ски обувки" in winter sports (623) also finds skis and complete sets.
+
 ## Still open (non-blocking)
 
-1. Moderation time from `new` to `active`, and what a rejection looks like. It didn't resolve within 3+ min, and the image post went straight to `limited`. This will show up on the first real post.
+1. What a moderation rejection looks like (status and any reason). Moderation itself took under 12 minutes on the first real post.
 2. Free-ad quota per category (how many, over what period). Only matters for volume.
 3. Title maximum in the OLX web form (the minimum is 16; the API enforces neither).
-4. Multi-value attributes (`delivery_paid_by`): `adverts.py` sends `{code, values: [...]}`. The spike only posted single values, so the first real post with delivery settles it.
 
 ## Implications for the design
 

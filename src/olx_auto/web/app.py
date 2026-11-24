@@ -11,13 +11,14 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import drafting, listings, profiles, style, users, validation
+from .. import drafting, listings, profiles, style, submitting, users, validation
 from ..config import Settings
 from ..olx import OlxError
 from ..photos import InvalidPhoto
 
 TEMPLATES = Jinja2Templates(directory=Path(__file__).parent / "templates")
 TEMPLATES.env.filters["usd"] = lambda v: f"${v:.2f}"
+TEMPLATES.env.globals["olx_states"] = submitting.OLX_STATES
 SESSION_MAX_AGE = 90 * 24 * 3600
 
 
@@ -83,9 +84,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/")
     def home(request: Request, user: CurrentUser):
         items = listings.list_all(user)
+        olx = user.olx(settings)
+        for item in items:  # posted adverts' OLX status; throttled, skips final states
+            submitting.refresh_status(settings, user, item, olx=olx)
         return render(request, "home.html", user=user, listings=items,
                       total_cost=sum(listings.total_cost(i) for i in items),
-                      olx_connected=user.olx(settings).connected, cost_of=listings.total_cost)
+                      olx_connected=olx.connected, cost_of=listings.total_cost)
 
     @app.get("/listings/new")
     def new_listing_page(request: Request, user: CurrentUser):
@@ -104,18 +108,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             _start(background, drafting.generate, user, listing["id"])
         return redirect(f"/listings/{listing['id']}")
 
-    def _start(background: BackgroundTasks, task, user: users.User, listing_id: str) -> None:
+    def _start(background: BackgroundTasks, task, user: users.User, listing_id: str, **kwargs) -> None:
         """Mark the run as started now, so the page the user lands on already shows progress."""
         drafting.mark_started(user, listing_id)
-        background.add_task(task, settings, user, listing_id)
+        background.add_task(task, settings, user, listing_id, **kwargs)
 
     def _editable(request: Request, user: users.User, listing_id: str):
-        """The listing, or a response: 404 for a foreign/unknown id, back to the card while a run is going."""
+        """The listing, or a response: 404 for a foreign/unknown id, back to the card while a run is
+        going or once it's posted."""
         try:
             listing = listings.load(user, listing_id)
         except KeyError:
             return None, render(request, "not_found.html", 404, user=user)
-        if listings.is_running(listing):
+        if listings.is_running(listing) or submitting.frozen(listing):
             return None, redirect(f"/listings/{listing_id}")
         return listing, None
 
@@ -125,14 +130,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             listing = listings.load(user, listing_id)
         except KeyError:
             return render(request, "not_found.html", 404, user=user)
+        submitting.refresh_status(settings, user, listing)
         trace = None
         path = listings.trace_path(user, listing_id)
         if settings.show_trace and path.exists():
             trace = json.loads(path.read_text())["runs"]
         category = listing["category"] or {}
         profile = profiles.load(user)
+        running = listings.is_running(listing)
         return render(request, "listing.html", user=user, listing=listing, draft=listing["draft"],
-                      running=listings.is_running(listing), category=category,
+                      running=running, frozen=running or submitting.frozen(listing),
+                      can_submit=submitting.can_submit(listing),
+                      interrupted=submitting.interrupted(listing), category=category,
                       attributes=category.get("attributes") or [], profile=profile,
                       problems=validation.submit_problems(listing, profile),
                       cost=listings.total_cost(listing), trace=trace,
@@ -193,6 +202,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             pass  # the last photo; the card hides its button
         return redirect(f"/listings/{listing_id}")
 
+    @app.post("/listings/{listing_id}/submit")
+    def submit_listing(request: Request, user: CurrentUser, listing_id: str):
+        listing, response = _editable(request, user, listing_id)
+        if response:
+            return response
+        try:
+            submitting.submit(settings, user, listing_id)
+        except ValueError:
+            pass  # problems or status; the card shows why
+        return redirect(f"/listings/{listing_id}")
+
     @app.post("/listings/{listing_id}/refine")
     async def refine_listing(request: Request, user: CurrentUser, listing_id: str,
                              background: BackgroundTasks):
@@ -208,6 +228,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         listings.save(user, listing)
         if settings.openrouter_api_key:
             _start(background, drafting.generate, user, listing_id)
+        return redirect(f"/listings/{listing_id}")
+
+    @app.post("/listings/{listing_id}/compare")
+    def compare_prices(request: Request, user: CurrentUser, listing_id: str, background: BackgroundTasks):
+        listing, response = _editable(request, user, listing_id)
+        if response:
+            return response
+        if settings.openrouter_api_key and listing["draft"]:
+            _start(background, drafting.generate, user, listing_id, compare=True)
         return redirect(f"/listings/{listing_id}")
 
     # ---- profile ----------------------------------------------------------

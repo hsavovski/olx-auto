@@ -20,6 +20,7 @@ class Reply:
     message: dict  # assistant message, ready to append to the conversation
     model: str
     usage: dict = field(default_factory=dict)  # prompt_tokens, completion_tokens, cost (USD)
+    citations: list[dict] = field(default_factory=list)  # [{url, title}] from OpenRouter's web plugin
 
     @property
     def cost(self) -> float:
@@ -40,11 +41,12 @@ class LLM:
             raise LLMError("OPENROUTER_API_KEY is not set in .env")
         self.client = openai.OpenAI(base_url=BASE_URL, api_key=api_key, timeout=180, max_retries=2)
 
-    def chat(self, model: str, messages: list[dict], **kwargs) -> Reply:
+    def chat(self, model: str, messages: list[dict], *, extra_body: dict | None = None, **kwargs) -> Reply:
         try:
             r = self.client.chat.completions.create(
                 model=model, messages=messages,
-                extra_body={"usage": {"include": True}},  # OpenRouter returns usage.cost in USD
+                # OpenRouter returns usage.cost in USD
+                extra_body={"usage": {"include": True}, **(extra_body or {})},
                 **kwargs)
         except openai.APIError as e:
             raise LLMError(f"{model}: {e}") from e
@@ -58,8 +60,10 @@ class LLM:
                  "function": {"name": c.function.name, "arguments": c.function.arguments or "{}"}}
                 for c in m.tool_calls]
         usage = r.usage.model_dump() if r.usage else {}
+        citations = [{"url": a.url_citation.url, "title": a.url_citation.title}
+                     for a in m.annotations or [] if a.type == "url_citation"]
         return Reply(message, r.model or model,
-                     {k: usage.get(k) for k in ("prompt_tokens", "completion_tokens", "cost")})
+                     {k: usage.get(k) for k in ("prompt_tokens", "completion_tokens", "cost")}, citations)
 
 
 def parse_json(text: str) -> dict:
